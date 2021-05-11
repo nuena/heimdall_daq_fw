@@ -41,6 +41,7 @@
 #include "ini.h"
 #include "iq_header.h"
 #include "sh_mem_util.h"
+#include "krakenudp.h"
 
 #define INI_FNAME "daq_chain_config.ini"
 #define FATAL_ERR(l) log_fatal(l); return -1;
@@ -101,7 +102,9 @@ int main(int argc, char* argv[])
 {    
     log_set_level(LOG_TRACE);
     configuration config;    
-        
+
+
+
     int exit_flag=0;
     int ch_num;
     int succ;
@@ -163,7 +166,10 @@ int main(int argc, char* argv[])
     strcpy(output_sm_buff->bw_ctr_fifo_name, DECIMATOR_IN_BW_FIFO);
 
     succ = init_out_sm_buffer(output_sm_buff);
-    if(succ !=0){FATAL_ERR("Shared memory initialization failed")}
+    if(succ !=0){FATAL_ERR("Shared memory initialization failed. Exiting.")}
+
+    netconf_t netconf;
+    open_socket(&netconf, 10003, "");
 	
     /*
      *
@@ -301,6 +307,9 @@ int main(int argc, char* argv[])
                             struct circ_buffer_struct *cbuff_m = &circ_buff_structs[m];
                             offset = IQ_HEADER_LENGTH/(sizeof(uint8_t)) + m*out_buffer_size*2;
                             memcpy(frame_ptr+offset, cbuff_m->iq_circ_buffer+wr_offset, out_buffer_size*2);
+
+                            send_data(&netconf, cbuff_m->iq_circ_buffer + wr_offset, out_buffer_size, 2*sizeof(uint8_t) );
+
                         }
                         wr_offset += out_buffer_size*2;
                         wr_offset = wr_offset % (buffer_num * in_buffer_size*2);                    
@@ -315,6 +324,10 @@ int main(int argc, char* argv[])
                             offset = IQ_HEADER_LENGTH/(sizeof(uint8_t)) + m*out_buffer_size*2;
                             memcpy(frame_ptr+offset, cbuff_m->iq_circ_buffer+wr_offset, chunk_size);
                             memcpy(frame_ptr+offset+chunk_size, cbuff_m->iq_circ_buffer, chunk_size_2);
+
+                            send_data(&netconf, cbuff_m->iq_circ_buffer+wr_offset, chunk_size, sizeof(uint8_t));
+                            send_data(&netconf, cbuff_m->iq_circ_buffer, chunk_size_2, sizeof(uint8_t));
+
                         }
                         wr_offset = chunk_size_2;
                     }   

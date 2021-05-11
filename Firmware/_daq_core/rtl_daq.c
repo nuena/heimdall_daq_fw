@@ -46,10 +46,12 @@
 #include "rtl-sdr.h"
 #include "rtl_daq.h"
 #include "iq_header.h"
+#include "krakenudp.h"
 
 #define NUM_BUFF 8  // Number of buffers used in the circular, coherent read buffer
 #define CFN "_data_control/rec_control_fifo" // Receiver control FIFO name 
-#define ASYNC_BUF_NUMBER     12// Number of buffers used by the asynchronous read 
+#define ASYNC_BUF_NUMBER     12// Number of buffers used by the asynchronous read
+
 
 #define INI_FNAME "daq_chain_config.ini"
 
@@ -417,8 +419,11 @@ int main( int argc, char** argv )
     if (config.en_noise_source_ctr == 1)
         log_info("Noise source control: enabled");
     else
-        log_info("Noise source control: disabled");    
-    
+        log_info("Noise source control: disabled");
+
+    netconf_t netconf;
+    open_socket(&netconf, 10001, "");
+
     /* Allocation */    
     struct iq_header_struct* iq_header = calloc(1, sizeof(struct iq_header_struct));
     
@@ -432,7 +437,7 @@ int main( int argc, char** argv )
         memset(rtl_rec, 0, sizeof(struct rtl_rec_struct));
 
         // Get device index by serial number
-        sprintf(dev_serial, "%d", 1000+i);
+        sprintf(dev_serial, "100%d", 1+i);
         int dev_index = rtlsdr_get_index_by_serial(dev_serial);
         rtl_rec->dev_ind = dev_index;
         log_info("Device serial:%s, index: %d",dev_serial, dev_index);
@@ -505,7 +510,7 @@ int main( int argc, char** argv )
     	rtlsdr_dev_t *dev = NULL;
     	if (rtlsdr_open(&dev, rtl_rec->dev_ind) !=0)
     	{
-       		log_fatal("Failed to open RTL-SDR device: %s", strerror(errno));
+       		log_fatal("Failed to open RTL-SDR device: %s, exiting.", strerror(errno));
             return -1;
     	}
     	rtl_rec->dev = dev;
@@ -598,11 +603,11 @@ int main( int argc, char** argv )
             /* Sending out the so far acquired data */            
             if(en_dummy_frame == 0) // DATA or CAL frame
             {            
-                for(int i=0; i<ch_no; i++)
-                {                
+                for(int i=0; i<ch_no; i++) {
                     rtl_rec = &rtl_receivers[i];
-                    rd_buff_ind = read_buff_ind % NUM_BUFF;                                              
-                    fwrite(rtl_rec->buffer + buffer_size * rd_buff_ind, 1, buffer_size, stdout);                
+                    rd_buff_ind = read_buff_ind % NUM_BUFF;
+                    fwrite(rtl_rec->buffer + buffer_size * rd_buff_ind, 1, buffer_size, stdout);
+                    send_data(&netconf, rtl_rec->buffer + buffer_size * rd_buff_ind, buffer_size, sizeof(uint8_t));
                 }
             }
             if(overdrive_flags !=0)
@@ -711,7 +716,7 @@ int main( int argc, char** argv )
         struct rtl_rec_struct *rtl_rec = &rtl_receivers[i];
         if(rtlsdr_cancel_async(rtl_rec->dev) != 0)
         {
-            log_fatal("Async read stop failed: %s", strerror(errno));
+            log_fatal("Async read stop failed: %s, exiting", strerror(errno));
             return -1;
         }        
         pthread_join(rtl_rec->async_read_thread, NULL);
@@ -728,7 +733,7 @@ int main( int argc, char** argv )
     }
     pthread_mutex_unlock(&buff_ind_mutex);
     pthread_join(fifo_read_thread, NULL);
-    log_info("All the resources are free now");
+    log_info("All the resources are free now, exiting.");
     free(rtl_receivers);
     return 0;
 }

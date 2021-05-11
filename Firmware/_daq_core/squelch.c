@@ -36,15 +36,18 @@
 #include <unistd.h>
 #include <semaphore.h>
 #include <string.h>
+#include <errno.h>
 #include "rtl_daq.h"
 #include "log.h"
 #include "ini.h"
 #include "iq_header.h"
 #include "sh_mem_util.h"
+#include "krakenudp.h"
 
 #define INI_FNAME "daq_chain_config.ini"
 #define SQC_FNAME "_data_control/squelch_control_fifo"
 #define FATAL_ERR(l) log_fatal(l); return -1;
+
 
 static float squelch_threshold = 0; // Configure the amplitude threshold level 0..1
 static float min_th            = 0;
@@ -275,6 +278,9 @@ int main(int argc, char* argv[])
     log_info("Channel number: %d", ch_num);
     log_info("Squelch threshold: %f ", squelch_threshold);
 
+    netconf_t netconf;
+    open_socket(&netconf, 10005, "");
+
     /* Prepare input and output IQ frames */
     struct iq_frame_struct_32 * iq_frame_out = calloc(1, sizeof(struct iq_frame_struct_32));
     struct iq_frame_struct_32 * iq_frame_in  = calloc(1, sizeof(struct iq_frame_struct_32));
@@ -290,7 +296,7 @@ int main(int argc, char* argv[])
     int active_buff_ind_in = -1;
 	
 	succ= init_in_sm_buffer(input_sm_buff);
-    if (succ !=0) {FATAL_ERR("Failed to init shared memory interface")} 
+    if (succ !=0) {FATAL_ERR("Failed to init shared memory interface, exiting.")} 
 	else{log_info("Input shared memory interface succesfully initialized");}
 
     /* Initializing output shared memory interface */
@@ -305,7 +311,7 @@ int main(int argc, char* argv[])
     int active_buff_ind_out = -1;    
 
     succ = init_out_sm_buffer(output_sm_buff);
-    if(succ !=0){FATAL_ERR("Shared memory initialization failed")}
+    if(succ !=0){FATAL_ERR("Shared memory initialization failed, exiting.")}
     else{log_info("Output shared memory interface succesfully initialized");}
 	
     /* Configuring squelch parameters */
@@ -434,6 +440,8 @@ int main(int argc, char* argv[])
                 log_trace("<--Transfering frame type: %d, daq ind:[%d]",iq_frame_out->header->frame_type, iq_frame_out->header->daq_block_index);
                 cpi_tracker = iq_frame_out->header->cpi_index;
                 send_ctr_buff_ready(output_sm_buff, active_buff_ind_out);
+
+                send_data(&netconf, iq_frame_out->payload, iq_frame_out->header->cpi_length, 2 * sizeof(float));
             }
                 
         }
