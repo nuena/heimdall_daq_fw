@@ -99,6 +99,8 @@ typedef struct
     const char* hw_name;
     int hw_unit_id;
     int ioo_type;
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 /*
@@ -153,6 +155,14 @@ static int handler(void* conf_struct, const char* section, const char* name,
     else if (MATCH("daq", "log_level")) 
     {
         pconfig->log_level = atoi(value);
+    }
+    else if (MATCH("daq", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("daq", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -422,7 +432,7 @@ int main( int argc, char** argv )
         log_info("Noise source control: disabled");
 
     netconf_t netconf;
-    open_socket(&netconf, 10001, "");
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
 
     /* Allocation */    
     struct iq_header_struct* iq_header = calloc(1, sizeof(struct iq_header_struct));

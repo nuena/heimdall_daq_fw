@@ -55,7 +55,9 @@ typedef struct
     int cpi_size;
     int daq_buffer_size;
     int decimation_ratio;    
-    int log_level;      
+    int log_level;
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 /*
@@ -86,6 +88,14 @@ static int handler(void* conf_struct, const char* section, const char* name,
     else if (MATCH("daq", "log_level"))
     {
         pconfig->log_level = atoi(value);
+    }
+    else if (MATCH("rebuffer", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("rebuffer", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
     }
     else {return 0;  /* unknown section/name, error */}
     return 0;
@@ -169,7 +179,7 @@ int main(int argc, char* argv[])
     if(succ !=0){FATAL_ERR("Shared memory initialization failed. Exiting.")}
 
     netconf_t netconf;
-    open_socket(&netconf, 10003, "");
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
 	
     /*
      *

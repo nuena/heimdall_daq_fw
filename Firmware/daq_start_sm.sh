@@ -63,7 +63,7 @@ mkfifo _data_control/bw_delay_sync_hwc
 # Remove old log files
 rm _logs/*.log 2> /dev/null
 
-# Useful to set this on low power ARM devices 
+# Useful to set this on low power ARM devices
 #sudo cpufreq-set -g performance
 
 # Set for Tinkerboard with heatsink/fan
@@ -112,7 +112,7 @@ fi
 
 # Start main program chain -Thread 0 Normal (non squelch mode)
 echo "Starting DAQ Subsystem"
-chrt -f 99 _daq_core/rtl_daq.out 2> _logs/rtl_daq.log | \
+chrt -f 99 _daq_core/rtl_daq.out 2> _logs/daq.log | \
 chrt -f 99 _daq_core/sync.out 2>_logs/sync.log | \
 chrt -f 99 _daq_core/rebuffer.out 0 2> _logs/rebuffer.log &
 
@@ -145,7 +145,7 @@ echo -e "      )  (     "
 echo -e "      (   ) )  "
 echo -e "       ) ( (   "
 echo -e "     _______)_ "
-echo -e "  .-'---------|" 
+echo -e "  .-'---------|"
 echo -e " (  |/\/\/\/\/|"
 echo -e "  '-./\/\/\/\/|"
 echo -e "    '_________'"

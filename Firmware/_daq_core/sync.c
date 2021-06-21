@@ -57,6 +57,8 @@ typedef struct
     int num_ch;
     int daq_buffer_size;
     int log_level;
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 /*
@@ -80,6 +82,14 @@ static int handler(void* conf_struct, const char* section, const char* name,
     else if (MATCH("daq", "log_level")) 
     {
         pconfig->log_level = atoi(value);
+    }
+    else if (MATCH("sync", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("sync", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -181,7 +191,7 @@ int main(int argc, char* argv[])
     log_info("Number of IQ samples per channel: %d", sample_size);
 
     netconf_t netconf;
-    open_socket(&netconf, 10002, "");
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
     
     delays = (int*) malloc(ch_no*sizeof(int));    
     int read_size; // Stores the read bytes from stdin

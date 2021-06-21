@@ -66,6 +66,8 @@ typedef struct {
     int en_filter_reset;
     int tap_size;
     int log_level;
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 /*
@@ -81,6 +83,14 @@ static int handler(void *conf_struct, const char *section, const char *name,
     else if (MATCH("pre_processing", "en_filter_reset")) { pconfig->en_filter_reset = atoi(value); }
     else if (MATCH("pre_processing", "fir_tap_size")) { pconfig->tap_size = atoi(value); }
     else if (MATCH("daq", "log_level")) { pconfig->log_level = atoi(value); }
+    else if (MATCH("decimate", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("decimate", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
+    }
     else { return 0;  /* unknown section/name, error */}
     return 0;
 }
@@ -121,7 +131,7 @@ int main(int argc, char **argv)
     log_info("CPI size: %d", config.cpi_size);
 
     netconf_t netconf;
-    if( !open_socket(&netconf, 10004, "fir_decimate"))
+    if( !open_socket(&netconf, config.udp_addr, config.udp_port, "fir_decimate"))
     {
         log_warn("Something seems to have gone wrong when opening UDP port");
     } else {
@@ -352,6 +362,7 @@ int main(int argc, char **argv)
         }
         send_ctr_buff_free(input_sm_buff, active_buff_ind_in);
     } // End of the main processing loop
+    log_info("Exited main loop. Starting cleanup!");
     error_code_log(exit_flag);
     send_ctr_terminate(output_sm_buff);
     sleep(3);

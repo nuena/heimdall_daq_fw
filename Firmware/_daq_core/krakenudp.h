@@ -17,7 +17,7 @@ typedef struct
  * @param debug_info String that will be added to the debug outputs.
  * @return true on success, false on fail
  */
-bool open_socket(netconf_t * netconf,  unsigned short port, const char * debug_info);
+bool open_socket(netconf_t * netconf,  const char * udp_addr, unsigned short port, const char * debug_info);
 
 /**
  * Send raw data to specified network destination

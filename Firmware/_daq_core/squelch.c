@@ -69,6 +69,8 @@ typedef struct
     int cpi_size;
     int log_level;
     float squelch_threshold;
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 
@@ -96,6 +98,16 @@ static int handler(void* conf_struct, const char* section, const char* name, con
     else if (MATCH("daq", "log_level")) 
     {
         pconfig->log_level = atoi(value);
+        pconfig->log_level = LOG_DEBUG;
+        log_warn("Overriding log level to Debug!");
+    }
+    else if (MATCH("squelch", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("squelch", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -279,7 +291,7 @@ int main(int argc, char* argv[])
     log_info("Squelch threshold: %f ", squelch_threshold);
 
     netconf_t netconf;
-    open_socket(&netconf, 10005, "");
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
 
     /* Prepare input and output IQ frames */
     struct iq_frame_struct_32 * iq_frame_out = calloc(1, sizeof(struct iq_frame_struct_32));

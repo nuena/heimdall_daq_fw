@@ -37,7 +37,9 @@
 #include "sh_mem_util.h"
 #include "iq_header.h"
 #include "rtl_daq.h"
-#define INI_FNAME "daq_chain_config.ini" 
+#define INI_FNAME "daq_chain_config.ini"
+
+#include <sys/time.h>
 
 #define FATAL_ERR(l) log_fatal(l); return -1;
 
@@ -86,11 +88,18 @@ int send_iq_frame(struct iq_frame_struct_32* iq_frame, int socket)
 	
 	// Sending header
 	int size = send(socket, iq_frame->header, sizeof(struct iq_header_struct), 0);
+    log_trace("Sending header, size %d", size); 
 	// Sending payload
 	if (iq_frame->payload_size !=0){
-		size += send(socket, iq_frame->payload, transfer_size-IQ_HEADER_LENGTH, 0);}
+		size += send(socket, iq_frame->payload, transfer_size-IQ_HEADER_LENGTH, 0);
+        log_trace("Sending payload. Current size %d", size); 
+    }
 	// Check transfer
-	if(size != transfer_size){log_error("Ethernet transfer failed"); return -1;}	
+	if(size != transfer_size) { 
+        log_error("Ethernet transfer failed (%s). Intended send size: %d, actual send size: %d", strerror(errno), transfer_size, size);
+        log_error("Socket descriptor: %d", socket); 
+        return -1;
+    }	
 	//usleep(50000); // In some cases it is required to fully finish the sending from OS buffers
 	return 0;
 }
@@ -107,7 +116,9 @@ int main(int argc, char* argv[])
     if (ini_parse(INI_FNAME, handler, &config) < 0)
     {FATAL_ERR("Configuration could not be loaded, exiting ..")}    
     
-	log_set_level(config.log_level);          
+	log_set_level(config.log_level);
+    log_set_level(LOG_TRACE);
+    log_info("Overriding log level to LOG_TRACE!");
     struct iq_frame_struct_32* iq_frame =calloc(1, sizeof(struct iq_frame_struct_32));
 
     /* Initializing input shared memory interface */
@@ -124,38 +135,52 @@ int main(int argc, char* argv[])
 	else{log_info("Shared memory interface succesfully initialized");}
 	
     /* Starting IQ ethernet server */
-	int run_server=1;
-    while(run_server)
+    /* This function blocks until a client connects to the server */
+    int * sockets = malloc(2*sizeof(int)); //[server, client]
+    iq_stream_con(sockets);
+    // TODO: Check and handle success
+
+    int exit_flag =0;
+    struct timeval tval_before, tval_after, tval_result;
+    while(!exit_flag)
     {
-		
-		/* This function blocks until a client connects to the server */
-		int * sockets = malloc(2*sizeof(int)); //[server, client] 
-        iq_stream_con(sockets);        
-        // TODO: Check and handle success
-        
-        int exit_flag =0;
-        while(!exit_flag) 
-        {
-        	// Acquire data buffer on the shared memory interface
-        	active_buff_ind = wait_buff_ready(input_sm_buff);
-       	    if (active_buff_ind < 0){exit_flag = active_buff_ind; break;}
-            iq_frame->header = (struct iq_header_struct*) input_sm_buff->shm_ptr[active_buff_ind];
-			iq_frame->payload = ((float *) input_sm_buff->shm_ptr[active_buff_ind] )+ IQ_HEADER_LENGTH/sizeof(float);
-			CHK_SYNC_WORD(check_sync_word(iq_frame->header));
-			iq_frame->payload_size=iq_frame->header->cpi_length * iq_frame->header->active_ant_chs;
-			//dump_iq_header(iq_frame->header);
-			
-			ret=send_iq_frame(iq_frame, sockets[1]);
-			send_ctr_buff_free(input_sm_buff, active_buff_ind);
-			if(ret !=0){log_error("Closing connection"); break;}
-			
-			/* Waiting for further download commands on the Ethernet link*/
-			int bytes_recieved = recv(sockets[1],eth_cmd,1024,0);
-			eth_cmd[bytes_recieved] = '\0';
-			if (strcmp(eth_cmd, "IQDownload") !=0){exit_flag=1;}       
-       }
-        iq_stream_close(sockets);
-    }
+        gettimeofday(&tval_before, NULL);
+        // Acquire data buffer on the shared memory interface
+        active_buff_ind = wait_buff_ready(input_sm_buff);
+        gettimeofday(&tval_after, NULL);
+        timersub(&tval_after, &tval_before, &tval_result);
+
+        log_trace("Spent %ld.%06ld s waiting for buffer ready",  (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
+        if (active_buff_ind < 0){exit_flag = active_buff_ind; break;}
+        iq_frame->header = (struct iq_header_struct*) input_sm_buff->shm_ptr[active_buff_ind];
+        iq_frame->payload = ((float *) input_sm_buff->shm_ptr[active_buff_ind] )+ IQ_HEADER_LENGTH/sizeof(float);
+        CHK_SYNC_WORD(check_sync_word(iq_frame->header));
+        iq_frame->payload_size=iq_frame->header->cpi_length * iq_frame->header->active_ant_chs;
+        //dump_iq_header(iq_frame->header);
+
+        gettimeofday(&tval_before, NULL);
+        ret=send_iq_frame(iq_frame, sockets[1]);
+        gettimeofday(&tval_after, NULL);
+        timersub(&tval_after, &tval_before, &tval_result);
+
+        log_trace("Spent %ld.%06ld s waiting for data sending", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
+
+        send_ctr_buff_free(input_sm_buff, active_buff_ind);
+        if(ret !=0){log_error("Closing connection"); break;}
+
+        /* Waiting for further download commands on the Ethernet link*/
+        gettimeofday(&tval_before, NULL);
+        int bytes_recieved = recv(sockets[1],eth_cmd,1024,0);
+        eth_cmd[bytes_recieved] = '\0';
+        gettimeofday(&tval_after, NULL);
+        timersub(&tval_after, &tval_before, &tval_result);
+        log_trace("Spent %ld.%06ld s waiting for data recv", (long int)tval_result.tv_sec, (long int)tval_result.tv_usec);
+        log_trace("Received following string: %s", eth_cmd);
+
+        if (strcmp(eth_cmd, "IQDownload") !=0){exit_flag=1;}
+   }
+    iq_stream_close(sockets);
+
 	destory_sm_buffer(input_sm_buff);
 	log_info("DAQ chain IQ server has exited.");
 }
