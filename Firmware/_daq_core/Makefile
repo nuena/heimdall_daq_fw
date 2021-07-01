@@ -1,7 +1,7 @@
 # Makefile for compiling the DAQ firmware
 # Author: Tamás Pető, Sándor Bajusz
 CC=gcc
-CFLAGS=-Wall -std=gnu99 -march=native -O2
+CFLAGS=-Wall -std=gnu99 -march=native -g # -O2
 RM= rm -f
 
 HOST_ARCH := $(shell uname -m)
