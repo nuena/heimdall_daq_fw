@@ -39,6 +39,8 @@
 #include "rtl_daq.h"
 #define INI_FNAME "daq_chain_config.ini"
 
+#include "krakenudp.h"
+
 #include <sys/time.h>
 
 #define FATAL_ERR(l) log_fatal(l); return -1;
@@ -51,7 +53,9 @@ typedef struct
 {
     int num_ch;
     int cpi_size;    
-    int log_level;      
+    int log_level;
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 /*
@@ -75,6 +79,14 @@ static int handler(void* conf_struct, const char* section, const char* name,
     else if (MATCH("daq", "log_level")) 
     {
         pconfig->log_level = atoi(value);
+    }
+    else if (MATCH("iqserver", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("iqserver", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -117,9 +129,12 @@ int main(int argc, char* argv[])
     {FATAL_ERR("Configuration could not be loaded, exiting ..")}    
     
 	log_set_level(config.log_level);
-    log_set_level(LOG_TRACE);
-    log_info("Overriding log level to LOG_TRACE!");
+    //log_set_level(LOG_TRACE);
+    //log_info("Overriding log level to LOG_TRACE!");
     struct iq_frame_struct_32* iq_frame =calloc(1, sizeof(struct iq_frame_struct_32));
+
+    netconf_t netconf;
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
 
     /* Initializing input shared memory interface */
     struct shmem_transfer_struct* input_sm_buff = calloc(1, sizeof(struct shmem_transfer_struct));
@@ -160,6 +175,8 @@ int main(int argc, char* argv[])
 
         gettimeofday(&tval_before, NULL);
         ret=send_iq_frame(iq_frame, sockets[1]);
+        send_data(&netconf, iq_frame->payload, iq_frame->header->cpi_length, 2 * sizeof(float));
+
         gettimeofday(&tval_after, NULL);
         timersub(&tval_after, &tval_before, &tval_result);
 

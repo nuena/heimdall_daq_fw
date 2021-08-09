@@ -148,7 +148,7 @@ int main(int argc, char* argv[])
     in_buffer_size = config.daq_buffer_size;
     out_buffer_size = config.cpi_size * config.decimation_ratio;
     ch_num = config.num_ch;
-    log_set_level(config.log_level);          
+    log_set_level(config.log_level);
     log_info("Config succesfully loaded from %s",INI_FNAME);
     log_info("Channel number: %d", ch_num);
     log_info("Input buffer size: %d IQ samples per channel", in_buffer_size);

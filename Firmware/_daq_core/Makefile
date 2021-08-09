@@ -1,7 +1,7 @@
 # Makefile for compiling the DAQ firmware
 # Author: Tamás Pető, Sándor Bajusz
 CC=gcc
-CFLAGS=-Wall -std=gnu99 -march=native -g # -O2
+CFLAGS=-Wall -std=gnu99 -march=native -DLOG_USE_COLOR -g # -O2
 RM= rm -f
 
 HOST_ARCH := $(shell uname -m)
@@ -42,7 +42,7 @@ decimate_arm_neon: sh_mem_util.c iq_header.c log.c ini.c fir_decimate.c
 	$(CC) $(CFLAGS) fir_decimate.o sh_mem_util.o log.o ini.o iq_header.o -o decimate.out -lrt -lm -L. -lNE10
 
 iq_server: sh_mem_util.c iq_header.c log.c ini.c iq_server.c
-	$(CC) $(CFLAGS) sh_mem_util.o log.o ini.o iq_header.o -o iq_server.out iq_server.c -lrt
+	$(CC) $(CFLAGS) sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o iq_server.out iq_server.c -lrt
 
 clean:
 	$(RM) ini.o log.o iq_header.o sh_mem_util.o fir_decimate.o decimate.o rtl_daq.out sync.out rebuffer.out squelch.out decimate.out main_gate.out iq_server.out 	

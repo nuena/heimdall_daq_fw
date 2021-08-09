@@ -55,7 +55,7 @@ void send_data(netconf_t * netconf, void * data, const unsigned int n_elem, cons
 
             if (0 > sendto(netconf->sockfd, (const char *) data,
                            remaining_bytes > UDP_MAXLEN ? UDP_MAXLEN : remaining_bytes,
-                           MSG_DONTWAIT, (const struct sockaddr *) &netconf->addr, sizeof(netconf->addr)))
+                           0, (const struct sockaddr *) &netconf->addr, sizeof(netconf->addr)))
                 log_warn("Sendto encountered error: %s", strerror(errno));
 
             remaining_bytes -= UDP_MAXLEN;

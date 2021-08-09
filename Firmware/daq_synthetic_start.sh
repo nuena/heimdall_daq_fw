@@ -8,7 +8,7 @@
 
 # Check config file
 res=$(python3 ini_checker.py no_hw 2>&1)
-if test -z "$res" 
+if test -z "$res"
 then
       echo -e "\e[92mConfig file check [OK]\e[39m"
 else
