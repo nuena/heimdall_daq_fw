@@ -3,6 +3,7 @@ import logging
 import subprocess
 import sys
 from configparser import ConfigParser
+import numpy as np
 
 """
 	Checks the values in config ini file
@@ -115,8 +116,12 @@ def check_ini(parameters, en_hw_check=True):
     if not chk_int(daq_params['daq_buffer_size']):
         error_list.append("DAQ buffer size must be a non-zero integer. Currently it is: '{0}' ".format(daq_params['daq_buffer_size']))
     else:
-        if int(daq_params['daq_buffer_size']) <= 0:
+        daq_buffer_size = int(daq_params['daq_buffer_size'])
+        if daq_buffer_size <= 0:
             error_list.append("DAQ buffer size must be a non-zero integer Currently it is: '{0}' ".format(daq_params['daq_buffer_size']))
+        
+        if not (daq_buffer_size & (daq_buffer_size-1) == 0):
+            error_list.append("DAQ buffer size must be a the power of 2 Currently it is: '{0}' ".format(daq_params['daq_buffer_size']))
 
     if not chk_int(daq_params['center_freq']):
         error_list.append("DAQ center frequency must be a non-zero integer. Currently it is: '{0}' ".format(daq_params['center_freq']))
@@ -178,10 +183,12 @@ def check_ini(parameters, en_hw_check=True):
 
     preproc_params = parameters['pre_processing']
 
+    cpi_size = -1
     if not chk_int(preproc_params['cpi_size']):
         error_list.append("CPI size must be a positive integer. Currently it is: '{0}' ".format(preproc_params['cpi_size']))
     else:
-        if int(preproc_params['cpi_size']) <1:
+        cpi_size = int(preproc_params['cpi_size'])
+        if cpi_size <1:
             error_list.append("CPI size must be a positive integer. Currently it is: '{0}' ".format(preproc_params['cpi_size']))
 
     if not chk_int(preproc_params['decimation_ratio']):
@@ -226,8 +233,11 @@ def check_ini(parameters, en_hw_check=True):
     if not chk_int(cal_params['corr_size']):
         error_list.append("Calibration correlation size must be a positive integer. Currently it is: '{0}' ".format(cal_params['corr_size']))
     else:
-        if int(cal_params['corr_size']) < 1:
+        corr_size = int(cal_params['corr_size'])
+        if corr_size < 1:
             error_list.append("Calibration correlation size must be a positive integer. Currently it is: '{0}' ".format(cal_params['corr_size']))
+        if corr_size > cpi_size:
+            error_list.append("Calibration correlation size must greater than the CPI size")
 
     if not chk_int(cal_params['std_ch_ind']):
         error_list.append("Standard channel index must be a non negative integer. Currently it is: '{0}' ".format(cal_params['std_ch_ind']))
