@@ -46,6 +46,7 @@
 #include "rtl-sdr.h"
 #include "rtl_daq.h"
 #include "iq_header.h"
+#include "krakenudp.h"
 
 #define NUM_BUFF 8  // Number of buffers used in the circular, coherent read buffer
 #define CFN "_data_control/rec_control_fifo" // Receiver control FIFO name 
@@ -97,6 +98,9 @@ typedef struct
     const char* hw_name;
     int hw_unit_id;
     int ioo_type;
+    const char * udp_addr;
+    uint16_t udp_port;
+    int udp_channel_index;
 } configuration;
 
 /*
@@ -151,6 +155,17 @@ static int handler(void* conf_struct, const char* section, const char* name,
     else if (MATCH("daq", "log_level")) 
     {
         pconfig->log_level = atoi(value);
+    }
+    else if (MATCH("daq", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("daq", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
+    }
+    else if (MATCH("daq", "udp_channel_index")) {
+        pconfig->udp_channel_index = atoi(value);
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -447,7 +462,9 @@ int main( int argc, char** argv )
         log_warn("Set to default device index: 0");
         ctr_channel_dev_index=0;
     }
-   
+    netconf_t netconf;
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
+
     // Initialization
     for(int i=0; i<ch_no; i++)
     {
@@ -602,7 +619,10 @@ int main( int argc, char** argv )
                 {                
                     rtl_rec = &rtl_receivers[i];
                     rd_buff_ind = read_buff_ind % NUM_BUFF;                                              
-                    fwrite(rtl_rec->buffer + buffer_size * rd_buff_ind, 1, buffer_size, stdout);                
+                    fwrite(rtl_rec->buffer + buffer_size * rd_buff_ind, 1, buffer_size, stdout);
+                    if(config.udp_channel_index < 0 || config.udp_channel_index == i) {
+                        send_data(&netconf, rtl_rec->buffer + buffer_size * rd_buff_ind, buffer_size, sizeof(uint8_t));
+                    }
                 }
             }
             if(overdrive_flags !=0)
