@@ -4,10 +4,10 @@
     The signal is assumed to be burst like with the following parameters:
         - burst repetition interval [ms]
         - burst length [ms]
-        - signal bandwidth [kHz] 
-	
+        - signal bandwidth [kHz]
+
 	Project: HeIMDALL DAQ Firmware
-	Author : Tamas Peto	
+	Author : Tamas Peto
 """
 import numpy as np
 import logging
@@ -34,14 +34,14 @@ meta={"ini_version":"2",
 hw={"name"    :"k5",
     "unit_id" :"0",
     "ioo_type":"0",
-    "num_ch"  :"5"
+    "num_ch"  :"4"
 }
 #[daq]
 daq = {
     "log_level"             :"3",
     "daq_buffer_size"       :"262144",
-    "center_freq"           :"600000000",
-    "sample_rate"           :"1000000",
+    "center_freq"           :"161975000",
+    "sample_rate"           :"1024000",
     "gain"                  :"0",
     "en_noise_source_ctr"   :"1",
     "ctr_channel_serial_no" :"1004"
@@ -122,16 +122,16 @@ args =vars( parser.parse_args())
 # ----------------> MANDATORY PARAMETERS <----------------
 BRI          = args['bri'][0]         # burst repetition interval [ms]
 burst_length = args['burst_length'][0]# [ms]
-bw           = args['bw'][0]          # signal bandwidth [kHz] 
+bw           = args['bw'][0]          # signal bandwidth [kHz]
 # ---------------->  Extracted from CLI  <----------------
 
 minimum_FIR_tap_size = 16
 logging.info("Preparing config file..")
 cfg_fname="autogen.ini"
 
-fs = 2400000 # Set sampling rate to maximum to be able to increase the ENOBs as much as possible
+fs = 1024000 # Set sampling rate to maximum to be able to increase the ENOBs as much as possible
 decimation_ratio = int(fs/(bw*10**3))
-fir_tap_size = 2**(int(np.log2(decimation_ratio))+1) 
+fir_tap_size = 2**(int(np.log2(decimation_ratio))+1)
 if fir_tap_size < minimum_FIR_tap_size: fir_tap_size=minimum_FIR_tap_size
 fs_dec     = fs/decimation_ratio # Decimated sample rate
 cpi_size   = int(burst_length*10**-3 * fs_dec)
