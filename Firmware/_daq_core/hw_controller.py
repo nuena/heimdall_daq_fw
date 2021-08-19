@@ -1,11 +1,11 @@
-"""    
-    Hardware Controller Module 
+"""
+    Hardware Controller Module
 
-    Project  : HeIMDALL DAQ Firmware 
+    Project  : HeIMDALL DAQ Firmware
     Author   : Tamás Pető
     RF front : R820T compatible, For ADPIS dedicated IQ modulator is required
     License  : GNU GPL V3
-        
+
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
    the Free Software Foundation, either version 3 of the License, or
@@ -35,10 +35,10 @@ ctr_request = [] # This list stores the confiuration command and parameters [cmd
 ctr_request_condition = threading.Condition()
 
 class HWC():
-    
-    def __init__(self):                 
-        
-        self.log_level=0 # Set from the ini file        
+
+    def __init__(self):
+
+        self.log_level=0 # Set from the ini file
         self.rcf_name = "_data_control/rec_control_fifo"
         self.sqcf_name = "_data_control/squelch_control_fifo"
         self.track_lock_ctr_fname = "_data_control/iq_track_lock"
@@ -48,13 +48,13 @@ class HWC():
         self.in_shmem_iface = None
         self.valid_gains = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254, 280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496]
         # Defined by the R820T tuner
-                
-        self.M = 7 # Number of receiver channels 
+
+        self.M = 7 # Number of receiver channels
         self.N = 2**18 # Number of samples per channel
         self.N_proc = 2**13
         self.iq_mod = None
-        self.en_adpis= 0 # Enables or Disables of the ADPIS hardware usage 
-        self.en_squelch = 0 # Enables or Disables of the Squelch module usage 
+        self.en_adpis= 0 # Enables or Disables of the ADPIS hardware usage
+        self.en_squelch = 0 # Enables or Disables of the Squelch module usage
         self.gains=[0]*self.M  # Initial gain values (Indices, not exact values!)
         self.noise_source_state = False
         self.gain_tune_states=[False]*self.M
@@ -62,8 +62,8 @@ class HWC():
         self.gain_lock_interval = 0 # Required num. of frames to finish gain tuning
         self.unified_gain_control = True # Gain values will be equal for all the receivers
         self.last_gains=[0]*self.M # Stores the gain values to reset them after calibration
-        
-        # Support for calibration track mode 
+
+        # Support for calibration track mode
         self.cal_track_mode = 0
         self.cal_frame_interval = 50 # Number of frames between two cal frames in cal_track_mode=2
         self.cal_frame_burst_size = 5 # Number of cal frames in a burst
@@ -80,30 +80,30 @@ class HWC():
         # Overwrite default configuration
         self._read_config_file("daq_chain_config.ini")
         self.iq_header = IQHeader()
-        
-        self.current_state = "STATE_INIT" 
+
+        self.current_state = "STATE_INIT"
         """
-            Block sizes measured in bytes        
+            Block sizes measured in bytes
             1 IQ sample consist of 2 32bit float number
         """
-        # Initialize logger        
+        # Initialize logger
         logging.basicConfig(level=self.log_level)
-        self.logger = logging.getLogger(__name__)           
+        self.logger = logging.getLogger(__name__)
 
         # Control interface server
         self.ctr_iface_server = CtrIfaceServer(self.M)
         self.ctr_iface_server.start()
 
         self.logger.info("Antenna channles {:d}".format(self.M))
-        self.logger.info("IQ samples per channel {:d}".format(self.N))        
+        self.logger.info("IQ samples per channel {:d}".format(self.N))
         self.logger.info("Processing sample size: {:d}".format(self.N_proc))
         self.logger.info("ADPIS state: {:d}".format(self.en_adpis))
         self.logger.warning("Reference channel index is fixed 0 ")
         self.logger.info("Hardware Controller initialized")
-        
+
     def _read_config_file(self, config_filename):
         """
-            Configures the internal parameters of the processing module based 
+            Configures the internal parameters of the processing module based
             on the values set in the confiugration file.
 
             TODO: Handle configuration field read failure
@@ -111,7 +111,7 @@ class HWC():
             -----------
                 :param: config_filename: Name of the configuration file
                 :type:  config_filename: string
-                    
+
             Return values:
             --------------
                 :return: 0: Confiugrations fields succesfully applied
@@ -123,17 +123,17 @@ class HWC():
             self.logger.error("DAQ core configuration file not found. Default parameters will be used!")
             return -1
         self.N = parser.getint('pre_processing', 'cpi_size')
-        self.M = parser.getint('hw', 'num_ch')                
+        self.M = parser.getint('hw', 'num_ch')
         self.N_proc = parser.getint('adpis', 'adpis_proc_size')
         gains_init_str=parser.get('adpis','adpis_gains_init')
-        self.cal_track_mode = parser.getint('calibration','cal_track_mode')        
+        self.cal_track_mode = parser.getint('calibration','cal_track_mode')
         self.rf_center_frequency = parser.getint('daq','center_freq')
         self.max_sync_fails = parser.getint('calibration','maximum_sync_fails')
         self.cal_frame_burst_size = parser.getint('calibration','cal_frame_burst_size')
         self.cal_frame_interval = parser.getint('calibration','cal_frame_interval')
         self.gain_lock_interval = parser.getint('calibration','gain_lock_interval')
-        self.squelch_threshold = parser.getfloat('squelch','amplitude_threshold')        
-        
+        self.squelch_threshold = parser.getfloat('squelch','amplitude_threshold')
+
         if parser.getint('calibration', 'unified_gain_control'):
             self.unified_gain_control=1
         else:
@@ -193,12 +193,12 @@ class HWC():
         try:
             self.rec_ctr_fifo      = open(self.rcf_name, 'w+b', buffering=0)
             if self.en_squelch:
-                self.squelch_ctr_fifo  = open(self.sqcf_name, 'w+b', buffering=0)                
+                self.squelch_ctr_fifo  = open(self.sqcf_name, 'w+b', buffering=0)
             self.track_lock_ctr_fd = open(self.track_lock_ctr_fname, 'r')
         except OSError as err:
             self.logger.critical("OS error: {0}".format(err))
             self.logger.critical("Failed to open control fifos, exiting..")
-            return -1        
+            return -1
         # Initialize shared memory interface
         self.in_shmem_iface = inShmemIface("delay_sync_hwc")
         if not self.in_shmem_iface.init_ok:
@@ -208,7 +208,7 @@ class HWC():
         if self.en_adpis:
             try:
                 from dac_controller import DACController
-            
+
                 # Initialize DAC controller
                 self.iq_mod = DACController(iface="I2C")
                 if not self.iq_mod.init_status:
@@ -222,38 +222,38 @@ class HWC():
             except:
                 logging.error("DAC Controller initialization failed")
         return 0
-    
+
     def close(self):
         """
             Close the communication and data interfaces that are opened during the start of the module
-        """ 
+        """
         if self.rec_ctr_fifo is not None:
             self.rec_ctr_fifo.close()
 
         if self.en_squelch and (self.squelch_ctr_fifo is not None):
             self.squelch_ctr_fifo.close()
-        
+
         if self.track_lock_ctr_fd is not None:
             self.track_lock_ctr_fd.close()
-        
+
         if self.in_shmem_iface is not None:
             self.in_shmem_iface.destory_sm_buffer()
-            
+
         self.logger.info("Module interfaces are closed")
     def _change_gains(self):
         """
-            Sends gain tuning request to the receiver module through the 
+            Sends gain tuning request to the receiver module through the
             receiver configuration FIFO
-            
+
             Used important object parameter:
-            
+
             :param: self.gains: Gain index array
             :type: gains: list of integers [gain index0, gain index1 , ..]
         """
         if self.unified_gain_control:
             # Force the same gain value for all the channels
             self.gains = [min(self.gains)]*self.M
-            
+
         # Prepare gain list
         gains=[]
         for m in range(self.M):
@@ -262,7 +262,7 @@ class HWC():
         # Send gain list
         self.rec_ctr_fifo.write('g'.encode('ascii'))
         self.rec_ctr_fifo.write(pack("i"*self.M, *gains))
-    
+
     def _tune_gains(self):
         """
             Performs IF gain tuning in order to maximaze the SINR in each channels by
@@ -293,7 +293,7 @@ class HWC():
                     self.logger.warning("Maximum gain reached, without overdrive, ch: {:d}".format(m))
                     self.gain_tune_states[m]=False
                     if self.unified_gain_control: # Disable tuning in all chanels
-                        self.gain_tune_states = [False]*self.M 
+                        self.gain_tune_states = [False]*self.M
         self._change_gains()
 
     def _control_squelch_thresold(self, threshold):
@@ -304,10 +304,10 @@ class HWC():
             -----------
                 :param: threshold: New amplitude threshold value, must be in the range of [0..1]
                 :type: threshold: float
-            
+
             Returns:
-            -------                
-               -1: Amplitude threshold is out of range 
+            -------
+               -1: Amplitude threshold is out of range
         """
         if self.en_squelch:
             if 0>threshold or threshold>1:
@@ -315,7 +315,7 @@ class HWC():
                 return -1
             else:
                 self.squelch_ctr_fifo.write('t'.encode('ascii'))
-                self.squelch_ctr_fifo.write(pack("f", threshold))            
+                self.squelch_ctr_fifo.write(pack("f", threshold))
                 self.current_squelch_threshold = threshold # Store current threshold level
 
     def _handle_control_reqest(self, command, params):
@@ -324,7 +324,7 @@ class HWC():
 
             Parameters:
             -----------
-            :param: command: String identifier of the requested configuration command 
+            :param: command: String identifier of the requested configuration command
             :param: params : List of parameters of the configuration command
 
             :type: command : string (4 character length)
@@ -353,29 +353,29 @@ class HWC():
                     self._change_gains()
             except ValueError:
                 self.logger.error("Improper gain value {:d}".format(params[m]))
-    
+
     def _control_noise_source(self, noise_source_state):
         """
             Enables or disables the internal noise of the receiver and set the proper gain values.
-            
+
             Gain and frequency values are fittet to the hardware of the Kerberos SDR v2
             You can change here the preset gain values depending on the calibration frequency here!
 
             Parameters:
             -----------
-            :param: noise_source_state: Requested state of the noise control 
+            :param: noise_source_state: Requested state of the noise control
                     (When set to True, the noise source will be enabled)
             :type : noise_source_state: Bool
 
         """
         if noise_source_state:
-            self.logger.info("Set gain values to perform calibration")  
+            self.logger.info("Set gain values to perform calibration")
             for m in range(self.M):
                 self.last_gains[m]=self.gains[m]
                 if self.iq_header.rf_center_freq > 400000000:
                     self.gains[m] = 10 # 16.6 dB
                 else:
-                    self.gains[m] = 0 # 0 dB
+                    self.gains[m] = 6 # 0 dB
             self._change_gains()
 
             self.logger.info("Enable noise source, [{:d}]".format(self.iq_header.cpi_index))
@@ -387,8 +387,8 @@ class HWC():
             self.rec_ctr_fifo.write('f'.encode('ascii'))
             self.noise_source_state = False # Next state
 
-            self.logger.info("Restore gain values after calibration")            
-            for m in range(self.M):                
+            self.logger.info("Restore gain values after calibration")
+            for m in range(self.M):
                 self.gains[m] = self.last_gains[m]
             self._change_gains()
 
@@ -400,44 +400,44 @@ class HWC():
             Start the main processing loop
         """
         while True:
-            
+
             #############################################
-            #           OBTAIN NEW DATA BLOCK           #  
+            #           OBTAIN NEW DATA BLOCK           #
             #############################################
-                        
-            # Obtained new data                                    
-            active_buff_index = self.in_shmem_iface.wait_buff_free()            
+
+            # Obtained new data
+            active_buff_index = self.in_shmem_iface.wait_buff_free()
             if active_buff_index < 0 or active_buff_index > 1:
                 logging.critical("Failed to acquire iq frame, exiting ..")
-                break;          
+                break;
 
             buffer = self.in_shmem_iface.buffers[active_buff_index]
             iq_header_bytes = buffer[0:1024].tobytes()
-            self.iq_header.decode_header(iq_header_bytes)            
+            self.iq_header.decode_header(iq_header_bytes)
             #self.iq_header.dump_header()
 
             if self.iq_header.check_sync_word():
                 logging.critical("IQ header sync word check failed, exiting..")
                 break
-                
+
             # IQ samples are currently not required in this module, hence this section is disabled
             # incoming_payload_size = self.iq_header.cpi_length*self.iq_header.active_ant_chs*2*int(self.iq_header.sample_bit_depth/8)
             # if incoming_payload_size > 0:
-            	# iq_samples = buffer[1024:1024 + incoming_payload_size].view(dtype=np.complex64).reshape(self.iq_header.active_ant_chs, self.iq_header.cpi_length) [:,0:self.N_proc] 
-                
+            	# iq_samples = buffer[1024:1024 + incoming_payload_size].view(dtype=np.complex64).reshape(self.iq_header.active_ant_chs, self.iq_header.cpi_length) [:,0:self.N_proc]
+
             self.logger.debug("Type:{:d}, CPI: {:d}, State:{:s}".format(self.iq_header.frame_type, self.iq_header.cpi_index, self.current_state))
             ##############################################
             #  Hardware Controller Finite State Machine  #
             ##############################################
-            
-            if self.iq_header.frame_type != IQHeader.FRAME_TYPE_DUMMY : # Not Dummy Frame 
-                
+
+            if self.iq_header.frame_type != IQHeader.FRAME_TYPE_DUMMY : # Not Dummy Frame
+
                 # -> Check power levels and gain values from the header
                 if self.iq_header.frame_type == IQHeader.FRAME_TYPE_DATA:
                     for m in range(self.M):
                         power = 0 # TODO: Read out from the header
-                        self.logger.debug("Channel {:d} power:{:.2f} dB, gain:{:d} [{:d}]".format(m, power, 
-                                        self.iq_header.if_gains[m], self.iq_header.cpi_index))                                            
+                        self.logger.debug("Channel {:d} power:{:.2f} dB, gain:{:d} [{:d}]".format(m, power,
+                                        self.iq_header.if_gains[m], self.iq_header.cpi_index))
 
                 # -> Chech overdrive per channel
                 for m in range(self.M):
@@ -446,8 +446,8 @@ class HWC():
 
                 #
                 #------------------------------------------>
-                #            
-                if self.current_state == "STATE_INIT": 
+                #
+                if self.current_state == "STATE_INIT":
                     # Set initial gain values
                     self._change_gains()
 
@@ -461,7 +461,7 @@ class HWC():
                     self.current_state = "STATE_GAIN_CTR_WAIT"
                 #
                 #------------------------------------------>
-                #   
+                #
                 elif self.current_state == "STATE_GAIN_CTR_WAIT":
                     gain_ctr_ready = True
                     # Check gain states
@@ -473,7 +473,7 @@ class HWC():
 
                 #
                 #------------------------------------------>
-                #   
+                #
                 elif self.current_state == "STATE_GAIN_TUNE":
                     # Decrease gain if overdrive is detected
                     if self.iq_header.adc_overdrive_flags:
@@ -497,18 +497,18 @@ class HWC():
                 #
                 #------------------------------------------>
                 #
-                elif self.current_state == "STATE_IQ_CAL":             
+                elif self.current_state == "STATE_IQ_CAL":
 
-                    # --> Noise Source Control 
+                    # --> Noise Source Control
                     if  self.cal_track_mode == 0 or self.cal_track_mode == 1 or \
                         (self.cal_track_mode == 2 and self.cal_frame_cntr < self.cal_frame_interval):
-                        
-                        # Enable noise source 
+
+                        # Enable noise source
                         if self.iq_header.sync_state < 5 : # Delay synchronizer is not in track or track lock mode
                             if self.iq_header.noise_source_state == 0:
                                 self._control_noise_source(noise_source_state=True)
                         else: # Delay synchronizer is in track mode - Disable Noise Source
-                            if self.iq_header.noise_source_state == 1: # Has sync, disable noise source if enabled                                    
+                            if self.iq_header.noise_source_state == 1: # Has sync, disable noise source if enabled
                                # Check Track lock approval (Used, when the system is calibrated and the antennas are detached)
                                track_lock_approval = True
                                if self.require_track_lock_intervention:
@@ -519,36 +519,36 @@ class HWC():
                                        self.track_lock_ctr_fd.seek(0, 0)
                                    else:
                                        logging.info("Waiting for track lock init. approval")
-                                       track_lock_approval = False                               
+                                       track_lock_approval = False
                                if track_lock_approval:
                                    self._control_noise_source(noise_source_state=False)
-                        # Arm / Disarm squelch module depending on the sync state                            
+                        # Arm / Disarm squelch module depending on the sync state
                         if self.en_squelch:
                             if self.iq_header.sync_state < 6: # System is not in synced state
-                                if self.current_squelch_threshold != 0: # Squelch module is armed 
+                                if self.current_squelch_threshold != 0: # Squelch module is armed
                                     self._control_squelch_thresold(0) # Disarming
                             else: # System is in synced state
                                 if self.current_squelch_threshold == 0 and self.current_squelch_threshold != self.squelch_threshold: # Squelch module is disarmed
                                     self._control_squelch_thresold(self.squelch_threshold) # Arming
 
-                       
+
                     # --> Burst calibration frames
-                    if self.cal_track_mode == 2: 
+                    if self.cal_track_mode == 2:
                         if self.iq_header.sync_state == 6:
                             self.cal_frame_cntr +=1
                             if self.cal_frame_cntr == self.cal_frame_interval:
                                 self.logger.info("Enable noise source burst [{:d}]".format(self.iq_header.cpi_index))
                                 self._control_noise_source(noise_source_state=True)
-                                
+
                             elif self.cal_frame_cntr == self.cal_frame_interval+self.cal_frame_burst_size:
                                 self.logger.info("Disabling noise source burst [{:d}]".format(self.iq_header.cpi_index))
                                 self._control_noise_source(noise_source_state=False)
                                 self.cal_frame_cntr=0
                         else: # self.iq_header.sync_state < 6
                             self.cal_frame_cntr = 0
-                    
+
                     # --> External control request handling
-                    ctr_request_condition.acquire()                    
+                    ctr_request_condition.acquire()
                     if len(ctr_request) !=0 :
                         self.logger.info("Control request: {:s}".format(ctr_request[0]))
                         self._handle_control_reqest(ctr_request[0], ctr_request[1:])
@@ -556,10 +556,10 @@ class HWC():
                         ctr_request_condition.notify()
                     ctr_request_condition.release()
 
-                #          
+                #
                 #------------------------------------------>
-                #   
-                elif self.current_state == "STATE_NOISE_CTR_WAIT":                 
+                #
+                elif self.current_state == "STATE_NOISE_CTR_WAIT":
                     if self.noise_source_state == self.iq_header.noise_source_state:
                         gain_ctr_ready = True
                         # Check gain states
@@ -568,13 +568,13 @@ class HWC():
                                 gain_ctr_ready = False
                         if gain_ctr_ready:
                             self.current_state = "STATE_IQ_CAL"
-                        
+
             self.in_shmem_iface.send_ctr_buff_ready(active_buff_index)
-            
-                        
+
+
 
 class CtrIfaceServer(threading.Thread):
-            
+
     def __init__(self, M):
         """
             Initialize the Ethernet socket based control interface
@@ -585,7 +585,7 @@ class CtrIfaceServer(threading.Thread):
         """
 
         self.logger = logging.getLogger(__name__)
-        threading.Thread.__init__(self)  
+        threading.Thread.__init__(self)
 
         # Control interface server parameters
         self.ctr_iface_port_no = 5001 # TODO: Set this port number from the ini file
@@ -594,7 +594,7 @@ class CtrIfaceServer(threading.Thread):
         self.ctr_iface_addr = ("", self.ctr_iface_port_no)
         self.M = M
         self.status=True
-       
+
     def run(self):
         """
             Starts the control server service thread
@@ -609,36 +609,36 @@ class CtrIfaceServer(threading.Thread):
             self.status=False
             return -1
 
-        while(True):    
+        while(True):
             # Wait for a connection
             self.logger.info("Waiting for new connection")
-            connection, client_address = self.ctr_iface_socket.accept()           
-            
-            try:                
-                self.logger.info("Conenction established ")                                
+            connection, client_address = self.ctr_iface_socket.accept()
+
+            try:
+                self.logger.info("Conenction established ")
 
                 # Main server loop
-                while True:      
-                    ctr_frame = connection.recv(128)          		
-                    if ctr_frame:                                                
+                while True:
+                    ctr_frame = connection.recv(128)
+                    if ctr_frame:
                         exit_flag = self.process_ctr_frame(ctr_frame)
                         if exit_flag:
-                            break                                                    
+                            break
                         # Send config success
-                        msg_bytes=("FNSD".encode()+bytearray(124))                                
+                        msg_bytes=("FNSD".encode()+bytearray(124))
                         connection.send(msg_bytes)
                     else:
                         self.logger.info("No more data from client, closing connection")
-                        break                    
+                        break
             finally:
-                # Clean up the connection                
-                connection.close()   
+                # Clean up the connection
+                connection.close()
 
     def process_ctr_frame(self, msg_bytes):
         """
             Processes the control interface message and prepares the command parameters
             for further command handling.
-            
+
             The input message is composed as follows:
             Total length: 128 byte
             -----------------------------------
@@ -663,21 +663,21 @@ class CtrIfaceServer(threading.Thread):
             self.logger.info("Received threshold value: {:f}".format(threshold))
             ctr_request.clear()
             ctr_request.append(command)
-            ctr_request.append(threshold)            
+            ctr_request.append(threshold)
 
         elif command == "FREQ":
             frequency = unpack('Q',msg_bytes[4:12])[0]
             self.logger.info("Received frequency value: {:f} Hz".format(frequency))
             ctr_request.clear()
             ctr_request.append(command)
-            ctr_request.append(frequency)            
+            ctr_request.append(frequency)
 
         elif command == "GAIN":
             gains = unpack('I'*self.M, msg_bytes[4:4+4*self.M])
             ctr_request.clear()
             ctr_request.append(command)
             for m in range(self.M):
-                self.logger.info("Received gain values - CH{:d}: {:d} dB x 10".format(m, gains[m]))            
+                self.logger.info("Received gain values - CH{:d}: {:d} dB x 10".format(m, gains[m]))
                 ctr_request.append(gains[m])
 
         elif command == "INIT":
@@ -687,7 +687,7 @@ class CtrIfaceServer(threading.Thread):
         else:
             self.logger.error("Unidentified control command: {:s}".format(command))
 
-        ctr_request_condition.wait() # Let the main thread process the request       
+        ctr_request_condition.wait() # Let the main thread process the request
         ctr_request_condition.release()
         return 0
 
