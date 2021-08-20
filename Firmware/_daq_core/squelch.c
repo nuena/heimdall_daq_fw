@@ -43,10 +43,16 @@
 #include "iq_header.h"
 #include "sh_mem_util.h"
 #include "krakenudp.h"
+#include <math.h>
 
 #define INI_FNAME "daq_chain_config.ini"
 #define SQC_FNAME "_data_control/squelch_control_fifo"
 #define FATAL_ERR(l) log_fatal(l); return -1;
+
+#define POWER // define "POWER" to use power approximation
+// #define NAIVE // define "NAIVE" to use simple approximation
+// todo improve that instead of using macros...
+
 
 
 static float squelch_threshold = 0; // Configure the amplitude threshold level 0..1
@@ -58,6 +64,10 @@ static sem_t config_sem;
 pthread_t fifo_read_thread;    
 static int exit_flag           = 0;
 static int control_signal; /*0- nothing to do, 1- refres threshold */
+
+static int checked_batches = 0;
+static int triggered_batches = 0;
+static clock_t last_check = 0;
 
 /*
  * This structure stores the configuration parameters, 
@@ -71,6 +81,10 @@ typedef struct
     float squelch_threshold;
     const char * udp_addr;
     uint16_t udp_port;
+    uint32_t threshold_update_interval_ms;
+    int upper_utilization_level_percent;
+    int lower_utilization_level_percent;
+    bool squelch_auto;
 } configuration;
 
 
@@ -109,11 +123,24 @@ static int handler(void* conf_struct, const char* section, const char* name, con
     {
         pconfig->udp_port = atoi(value);
     }
+    else if (MATCH("squelch", "threshold_update_interval_ms"))
+    {
+        pconfig->threshold_update_interval_ms = atoi(value);
+    }
+    else if (MATCH("squelch", "upper_utilization_level_percent"))
+    {
+        pconfig->upper_utilization_level_percent = atoi(value);
+    }
+    else if (MATCH("squelch", "lower_utilization_level_percent"))
+    {
+        pconfig->lower_utilization_level_percent = atoi(value);
+    }
     else {
         return 0;  /* unknown section/name, error */
     }
     return 0;
 }
+
 void * fifo_read_tf(void* arg) 
 {
    /*   
@@ -160,7 +187,7 @@ void * fifo_read_tf(void* arg)
 }
 
 
-int check_trigger(struct iq_frame_struct_32* iq_frame)
+int check_trigger(struct iq_frame_struct_32* iq_frame, configuration * pconfig)
 /* 
  *  Trigger condition is met, when the amplitude of the input signal 
  *  rises above a threshold level. This very simple trigger function
@@ -192,12 +219,85 @@ int check_trigger(struct iq_frame_struct_32* iq_frame)
     if(min_th == max_th)
     {
         return 0;
-    }    
+    }
+#ifdef POWER
+    // calculate signal power and trigger if power level is bigger than threshold
+    float acc = 0;
+    int count = 0;
+    for (int i = 0; i < iq_frame->header->cpi_length; i++) {
+      // Fast approximation of the magnitude of this sample
+      float mag = (fabsf(iq_frame->payload[i*2]  ) +
+                      fabsf(iq_frame->payload[i*2+1]));
+      if (mag > pconfig->squelch_threshold) {
+        count++;
+      }
+      acc += mag;
+    }
+
+    // Did this block have enough samples over the threshold?
+    if (count > pconfig->squelch_threshold) {
+      /*if (options.verbose) { // todo: improve logging [Task 1]
+        if (!triggered) {
+          fprintf(stderr, "Output triggered from byte offset %lu to ...", position);
+          event_count++;
+        }
+      }*/
+
+      // Write the previous block, if configured
+      /* todo: reenable previous/following block squelch [Task 2]
+      if (options.padding_blocks) {
+        if (!triggered) {
+          fwrite(data == data_a?data_b:data_a, sizeof(uint8_t)*2,
+                 options.block_size, options.output_file);
+        }
+      }*/
+
+      // Write this block
+      // fwrite(data, sizeof(uint8_t)*2, options.block_size, options.output_file); // TODO: Sub-block squelch
+      return 0; // mark entire block as data!
+      // triggered = true; // todo Task 2
+    } else { // Block was not over the threshold
+        /* todo: Task 1
+      if (options.verbose) {
+        if (triggered) {
+          fprintf(stderr, "\b\b\b%lu\n", position);
+        }
+      }*/
+
+      // Write the block following the event, if configured
+      /* Todo Task 2
+      if (triggered) {
+        if (options.padding_blocks) {
+          fwrite(data, sizeof(uint8_t)*2, options.block_size, options.output_file);
+        }
+      }
+       */
+
+      // We try to only include blocks below the threshold in the average
+      // to understand the background noise level
+      /* TODO: automatic squelch level!
+      if (pconfig->squelch_auto) {
+        avg += acc / iq_frame->header->cpi_length;
+        avg /= 2;
+      }*/
+
+      // triggered = false; TODO: Task 2
+    }
+#endif
+#ifdef NAIVE
+    // naive algorithm: trigger if one sample > threshold
     for(int n=scan_start;n<iq_frame->header->cpi_length*2;n+=2)
     {         
-        if( (iq_frame->payload[n] < min_th) | (iq_frame->payload[n] > max_th)){return n;}
-        if( (iq_frame->payload[n+1] < min_th) | (iq_frame->payload[n+1] > max_th)){return n;}
+        if( (iq_frame->payload[n] < min_th) | (iq_frame->payload[n] > max_th))
+        {
+            return n;
+        }
+        if( (iq_frame->payload[n+1] < min_th) | (iq_frame->payload[n+1] > max_th))
+        {
+            return n;
+        }
     }
+#endif
     scan_start = iq_frame->header->cpi_length*2;
     return -1;
 }
@@ -274,6 +374,8 @@ int main(int argc, char* argv[])
     bool drop_mode               = true;
     bool read_new_frame          = true; // Internally used state variable
     uint32_t cpi_tracker         = -1; // Tracks the CPI of the last transmitted frame
+
+    last_check = clock();
 
     /* Set drop mode from the command prompt*/    
     if (argc == 2){drop_mode = atoi(argv[1]);}
@@ -381,7 +483,7 @@ int main(int argc, char* argv[])
                     {                 
                         if (triggered == 0)
                         {                            
-                            trigger_sample_offset = check_trigger(iq_frame_in); 
+                            trigger_sample_offset = check_trigger(iq_frame_in, &config);
                             if (trigger_sample_offset >= 0)
                             {
                                 log_debug("Triggered, sample offset: %d, [%d]",trigger_sample_offset, iq_frame_in->header->daq_block_index);
