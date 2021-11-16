@@ -40,6 +40,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
+#include <sys/time.h>
 
 #include "ini.h"
 #include "log.h"
@@ -82,6 +83,11 @@ static uint32_t ch_no, buffer_size;
 static int ctr_channel_dev_index;
 
 /*
+ * This enum allows for saving to file, or reading from stdin instead of RTL
+ */
+enum operation_mode {NORMAL = 0, SAVE = 1, PLAYBACK = 2};
+
+/*
  * This structure stores the configuration parameters, 
  * that are loaded from the ini file
  */ 
@@ -101,7 +107,9 @@ typedef struct
     const char * udp_addr;
     uint16_t udp_port;
     int udp_channel_index;
+    enum operation_mode opmode;
 } configuration;
+
 
 /*
  * Ini configuration parser callback function  
@@ -166,6 +174,9 @@ static int handler(void* conf_struct, const char* section, const char* name,
     }
     else if (MATCH("daq", "udp_channel_index")) {
         pconfig->udp_channel_index = atoi(value);
+    }
+    else if (MATCH("daq", "operation_mode")) {
+        pconfig->opmode = atoi(value);
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -420,7 +431,26 @@ int main( int argc, char** argv )
     {
         log_fatal("Configuration could not be loaded, exiting ..");
         return -1;
-    }    
+    }
+
+    FILE * outfile = NULL;
+    if(config.opmode == SAVE) {
+        // get string with current time in ISO 8601:
+        struct timeval tv;
+        struct tm tm;
+        char timestamp[] = "YYYY-MM-dd_HH:mm:ss";
+        gettimeofday(&tv, NULL);
+
+        /* convert to time to 'struct tm' for use with strftime */
+        localtime_r(&tv.tv_sec, &tm);
+
+        /* format the time */
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d_%H:%M:%S", &tm);
+        char filename[50];
+        sprintf(filename, "rtl_data-%s.bin", timestamp);
+        outfile = fopen(filename, "w");
+        log_info("Writing data to %s", filename);
+    }
     buffer_size = config.daq_buffer_size*2;
     ch_no = config.num_ch;
     log_set_level(config.log_level);
@@ -432,7 +462,8 @@ int main( int argc, char** argv )
     if (config.en_noise_source_ctr == 1)
         log_info("Noise source control: enabled");
     else
-        log_info("Noise source control: disabled");    
+        log_info("Noise source control: disabled");
+    log_info("Operation mode is %d", config.opmode);
     
     /* Allocation */    
     struct iq_header_struct* iq_header = calloc(1, sizeof(struct iq_header_struct));
@@ -623,12 +654,18 @@ int main( int argc, char** argv )
                     if(config.udp_channel_index < 0 || config.udp_channel_index == i) {
                         send_data(&netconf, rtl_rec->buffer + buffer_size * rd_buff_ind, buffer_size, sizeof(uint8_t));
                     }
+                    if(config.opmode == SAVE) {
+                        fwrite(rtl_rec->buffer, sizeof(uint8_t), buffer_size, outfile);
+                    }
                 }
             }
             if(overdrive_flags !=0)
                 log_warn("Overdrive detected, flags: 0x%02X", overdrive_flags);
 
             fflush(stdout);
+            if(config.opmode == SAVE) {
+                fflush(outfile);
+            }
             overdrive_flags=0;
             read_buff_ind ++;
             if (en_dummy_frame)

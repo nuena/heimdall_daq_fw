@@ -375,7 +375,7 @@ class HWC():
                 if self.iq_header.rf_center_freq > 400000000:
                     self.gains[m] = 10 # 16.6 dB
                 else:
-                    self.gains[m] = 6 # 0 dB
+                    self.gains[m] = 10 # check  self.valid_gains for corresponding value to index!
             self._change_gains()
 
             self.logger.info("Enable noise source, [{:d}]".format(self.iq_header.cpi_index))

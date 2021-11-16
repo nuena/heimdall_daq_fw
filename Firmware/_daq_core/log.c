@@ -20,11 +20,15 @@
  * IN THE SOFTWARE.
  */
 
+
+// adpted https://unix.stackexchange.com/a/23780 for subsecond precision
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
 #include <time.h>
+#include <sys/time.h>
 
 #include "log.h"
 
@@ -92,38 +96,40 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
     return;
   }
 
+  struct timeval now;
+  int retval;
   /* Acquire lock */
   lock();
 
   /* Get current time */
-  time_t t = time(NULL);
-  struct tm *lt = localtime(&t);
+  retval = gettimeofday(&now, 0);
 
-  /* Log to stderr */
+  struct tm *lt = localtime(&now.tv_sec);
+
+  if (! L.fp) {
+      L.fp = stderr;
+  }
   if (!L.quiet) {
     va_list args;
-    char buf[16];
-    buf[strftime(buf, sizeof(buf), "%H:%M:%S", lt)] = '\0';
+// length of TIME string is 9 12:45:78\0
+// Precision of the subsecond timer set to 6
+    char timestr[9 + 6 + 1];
+    strftime(timestr, sizeof(timestr), "%H:%M:%S", lt);
+    char ms[21];
+    long usec = now.tv_usec;
+    if (usec < 1000000) {
+        usec *= 1000000; // for right padding of value. 1.000.000 == precision of 6
+    }
+    sprintf(ms, "%ld", usec);
+    ms[7] = '\0';
+    sprintf(timestr, "%s.%s", timestr, ms);  // precision is used here!
 #ifdef LOG_USE_COLOR
     fprintf(
-      stderr, "%s %s%-5s\x1b[0m \x1b[90m%s:%d:\x1b[0m ",
-      buf, level_colors[level], level_names[level], file, line);
+      L.fp, "%s %s%-5s\x1b[0m \x1b[90m%s:%d:\x1b[0m ",
+      timestr, level_colors[level], level_names[level], file, line);
 #else
-    fprintf(stderr, "%s %-5s %s:%d: ", buf, level_names[level], file, line);
+    fprintf(L.fp, "%s %-5s %s:%d: ", timestr, level_names[level], file, line);
 #endif
-    va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
-    va_end(args);
-    fprintf(stderr, "\n");
-    fflush(stderr);
-  }
-
-  /* Log to file */
-  if (L.fp) {
-    va_list args;
-    char buf[32];
-    buf[strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", lt)] = '\0';
-    fprintf(L.fp, "%s %-5s %s:%d: ", buf, level_names[level], file, line);
     va_start(args, fmt);
     vfprintf(L.fp, fmt, args);
     va_end(args);
