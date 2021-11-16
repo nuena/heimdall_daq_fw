@@ -51,7 +51,7 @@ class HWC():
         # Gain index:       0  1   2   3   4   5   6    7    8    9   10   11   12   13   14   15   16   17   18   19   20   21   22   23   24   25   26   27   28
         self.valid_gains = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254, 280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496]
         # Defined by the R820T tuner
-        
+                
         self.cal_gain_table=np.array([[100,200,300,400,500,600,700,1700],[6, 10, 13, 14, 18, 22, 28, 28]]) # First column frequeny [MHz], second column gain index [valid_gains]
         self.cal_gain_table[0,:]*=10**6 # Convert to Hz
         self.M = 7 # Number of receiver channels 

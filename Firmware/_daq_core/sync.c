@@ -42,10 +42,12 @@
 #include "log.h"
 #include "ini.h"
 #include "iq_header.h"
+#include "krakenudp.h"
 
 #define BUFFER_NO 2  // Buffer number
 #define INI_FNAME "daq_chain_config.ini"
 #define SYNC_CFN "_data_control/sync_control_fifo"
+
 /*
  * This structure stores the configuration parameters, 
  * that are loaded from the ini file
@@ -55,6 +57,8 @@ typedef struct
     int num_ch;
     int daq_buffer_size;
     int log_level;
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 /*
@@ -78,6 +82,14 @@ static int handler(void* conf_struct, const char* section, const char* name,
     else if (MATCH("daq", "log_level")) 
     {
         pconfig->log_level = atoi(value);
+    }
+    else if (MATCH("sync", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("sync", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -114,7 +126,7 @@ void * fifo_read_tf(void* arg)
     FILE * fd = fopen(SYNC_CFN, "r"); // FIFO descriptor    
     if(fd==0)    
     {
-        log_fatal("FIFO open error");
+        log_fatal("FIFO open error, exiting.");
         exit_flag = 1;
     }
     /* Main thread loop*/    
@@ -177,6 +189,9 @@ int main(int argc, char* argv[])
     log_info("Config succesfully loaded from: %s",INI_FNAME);
     log_info("Channel number: %d", ch_no);
     log_info("Number of IQ samples per channel: %d", sample_size);
+
+    netconf_t netconf;
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
     
     delays = (int*) malloc(ch_no*sizeof(int));    
     int read_size; // Stores the read bytes from stdin
@@ -296,22 +311,27 @@ int main(int argc, char* argv[])
                     read_pointer = sync_buffers[m].circ_buffer + delay;
                     fwrite(read_pointer , sizeof(uint8_t), sample_size*2, stdout);
                     fflush(stdout);
+
+                    send_data(&netconf, read_pointer, sample_size, 2*sizeof(uint8_t));
                 }
                 else // Write index must be 0
                 {
                     log_debug("Write in two chunk");
                     // Write first chunk
                     read_pointer = sync_buffers[m].circ_buffer + (delay+sample_size*2);
-                    fwrite(read_pointer , sizeof(uint8_t), (sample_size*2-delay), stdout);                        
-                    
+                    fwrite(read_pointer , sizeof(uint8_t), (sample_size*2-delay), stdout);
+                    send_data(&netconf, read_pointer, sample_size * 2 - delay, sizeof(uint8_t));
+
                     //Write second chunk
                     read_pointer = sync_buffers[m].circ_buffer;
                     fwrite(read_pointer , sizeof(uint8_t), delay, stdout);
                     fflush(stdout);
+
+                    send_data(&netconf, read_pointer, delay, sizeof(uint8_t));
                 }                   
                 log_debug("Channel: %d, Delay: %d [%ld]",m,delay,iq_header->daq_block_index);            
             } // End of multichannel data block read-write
-            log_trace("--> Transfering frame: type: %d, daq ind:[%d]",iq_header->frame_type, iq_header->daq_block_index);
+            log_trace("--> Transferring frame: type: %d, daq ind:[%d]",iq_header->frame_type, iq_header->daq_block_index);
         }
         /*
          *----------------------

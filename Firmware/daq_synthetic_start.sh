@@ -8,7 +8,7 @@
 
 # Check config file
 res=$(python3 ini_checker.py no_hw 2>&1)
-if test -z "$res" 
+if test -z "$res"
 then
       echo -e "\e[92mConfig file check [OK]\e[39m"
 else
@@ -72,7 +72,7 @@ mkfifo _data_control/bw_delay_sync_hwc
 # Remove old log files
 rm _logs/*.log 2> /dev/null
 
-# Useful to set this on low power ARM devices 
+# Useful to set this on low power ARM devices
 #sudo cpufreq-set -g performance
 
 # Set for Tinkerboard with heatsink/fan
@@ -88,7 +88,7 @@ if test $out -ne 0
 fi
 # Start main program chain -Thread 0 Normal (non squelch mode)
 echo "Starting DAQ Subsystem with synthetic data source"
-python3 _testing/test_data_synthesizer.py 2>_logs/synthetic.log | \
+python3 _testing/test_data_synthesizer.py 2>_logs/synthetic.log | tee | \
 _daq_core/sync.out 2>_logs/sync.log | \
 _daq_core/rebuffer.out 0 2> _logs/rebuffer.log &
 
@@ -121,7 +121,7 @@ echo -e "      )  (     "
 echo -e "      (   ) )  "
 echo -e "       ) ( (   "
 echo -e "     _______)_ "
-echo -e "  .-'---------|" 
+echo -e "  .-'---------|"
 echo -e " (  |/\/\/\/\/|"
 echo -e "  '-./\/\/\/\/|"
 echo -e "    '_________'"

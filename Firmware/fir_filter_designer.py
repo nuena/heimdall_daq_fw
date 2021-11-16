@@ -3,19 +3,19 @@
 """
 	Designs an FIR filter for the decimator module based on specified parameters found
 	in the "daq_chain_config.ini" file
-	
+
 	For the proper FIR configuration please check the documentation of the firmware.
 
 	After starting the daq chain you can check the transfer characteristics of the generated
 	FIR filter at : "_logs/Decimator_filter_transfer.html"
-	
+
 	Project: HeIMDALL DAQ Firmware
-	Author : Tamas Peto	
+	Author : Tamas Peto
 """
 import sys
 from scipy import signal
 import numpy as np
-import plotly.graph_objects as go 
+import plotly.graph_objects as go
 from configparser import ConfigParser
 
 parser = ConfigParser()
@@ -40,7 +40,8 @@ if tap_size <= decimation_ratio and decimation_ratio !=1 :
 
 print("Desig FIR filter with the following parameters: ")
 print("Decimation ratio: {:d}".format(decimation_ratio))
-print("Bandwidth: {:1.2f}".format(bandwidth))
+print("Relative Bandwidth: {:1.5f}".format(bandwidth))
+print("Absolute Bandwith: {:f}".format(bandwidth * fs))
 print("Tap size: {:d}".format(tap_size))
 print("Window function:", window)
 
@@ -62,7 +63,7 @@ h_log = 20*np.log10(np.abs(h))
 
 w= np.linspace(-fs/2,  fs/2, 2**16)+fc
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=w/10**6, y=h_log,  line=dict(width=2, dash='solid')))   
+fig.add_trace(go.Scatter(x=w/10**6, y=h_log,  line=dict(width=2, dash='solid')))
 
 # Export figure
 fig.update_layout(

@@ -37,15 +37,23 @@
 #include <unistd.h>
 #include <semaphore.h>
 #include <string.h>
+#include <errno.h>
 #include "rtl_daq.h"
 #include "log.h"
 #include "ini.h"
 #include "iq_header.h"
 #include "sh_mem_util.h"
+#include "krakenudp.h"
+
 
 #define INI_FNAME "daq_chain_config.ini"
 #define SQC_FNAME "_data_control/squelch_control_fifo"
 #define FATAL_ERR(l) log_fatal(l); return -1;
+#define CHECK_INTERVAL_MS 5000 // TODO: move to configuration parameter!
+
+#define POWER // define "POWER" to use power approximation
+// #define NAIVE // define "NAIVE" to use simple approximation
+// todo improve that instead of using macros...
 
 static float squelch_threshold = 0; // Configure the amplitude threshold level 0..1
 static float min_th            = 0;
@@ -56,6 +64,11 @@ static sem_t config_sem;
 pthread_t fifo_read_thread;    
 static int exit_flag           = 0;
 static int control_signal; /*0- nothing to do, 1- refres threshold */
+static int checked_batches = 0;
+static int triggered_batches = 0;
+
+static long triggered_samples_count = 0;
+static long nontriggered_samples_count = 0;
 
 /*
  * This structure stores the configuration parameters, 
@@ -67,8 +80,25 @@ typedef struct
     int cpi_size;
     int log_level;
     float squelch_threshold;
+    const char * udp_addr;
+    uint16_t udp_port;
+    uint32_t threshold_update_interval_ms;
+    int upper_utilization_level_percent;
+    int lower_utilization_level_percent;
+    bool squelch_auto;
 } configuration;
 
+/**
+ * Returns the current wall time with (up to) nanosecond precision
+ * @return time in seconds
+ */
+double get_time_double()
+{
+    // copied from https://stackoverflow.com/a/49360677
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    return now.tv_sec + now.tv_nsec*1e-9;
+}
 
 static int handler(void* conf_struct, const char* section, const char* name, const char* value)
 /*
@@ -80,14 +110,48 @@ static int handler(void* conf_struct, const char* section, const char* name, con
 
     #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
     if (MATCH("hw", "num_ch")) 
-        {pconfig->num_ch = atoi(value);} 
+    {
+        pconfig->num_ch = atoi(value);
+    } 
     else if (MATCH("pre_processing", "cpi_size")) 
-        {pconfig->cpi_size = atoi(value);}
+    {
+        pconfig->cpi_size = atoi(value);
+    }
     else if (MATCH("squelch", "amplitude_threshold")) 
-        {pconfig->squelch_threshold = atof(value);}
+    {
+        pconfig->squelch_threshold = atof(value);
+    }
     else if (MATCH("daq", "log_level")) 
-        {pconfig->log_level = atoi(value);}
-    else {return 0;}  /* unknown section/name, error */
+    {
+        pconfig->log_level = atoi(value);
+    }
+    else if (MATCH("squelch", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("squelch", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
+    }
+    else if (MATCH("squelch", "threshold_update_interval_ms"))
+    {
+        pconfig->threshold_update_interval_ms = atoi(value);
+    }
+    else if (MATCH("squelch", "upper_utilization_level_percent"))
+    {
+        pconfig->upper_utilization_level_percent = atoi(value);
+    }
+    else if (MATCH("squelch", "lower_utilization_level_percent"))
+    {
+        pconfig->lower_utilization_level_percent = atoi(value);
+    }
+    else if (MATCH("squelch", "squelch_auto"))
+    {
+        pconfig->squelch_auto = atoi(value);
+    }
+    else {
+        return 0;  /* unknown section/name, error */
+    }
     return 0;
 }
 void * fifo_read_tf(void* arg) 
@@ -137,7 +201,7 @@ void * fifo_read_tf(void* arg)
 }
 
 
-int check_trigger(struct iq_frame_struct_32* iq_frame)
+int check_trigger(struct iq_frame_struct_32* iq_frame, configuration * pconfig)
 /* 
  *  Trigger condition is met, when the amplitude of the input signal 
  *  rises above a threshold level. This very simple trigger function
@@ -170,11 +234,143 @@ int check_trigger(struct iq_frame_struct_32* iq_frame)
     {
         return 0;
     }    
+#ifdef POWER
+    static double last_check = 0;
+    static double noise_avg = 0;
+    static float sq_th = 0.05f; // only initially, will be updated by auto squelch!
+    // Recalculate power levels if necessary:
+    if(pconfig->squelch_auto)  // only if enabled
+        if((get_time_double() - last_check) > CHECK_INTERVAL_MS / 1000 // and enough time has passed
+            && (triggered_samples_count + nontriggered_samples_count) > 25 // and enough packets were processed
+            )
+        {   // only then update the automatic squelch
+            last_check = get_time_double();
+            float trigger_ratio =
+                    (float) triggered_samples_count / (float) (triggered_samples_count + nontriggered_samples_count);
+            log_info("Updating trigger. %d values over threshold, %d under threshold (%f %%), current threshold %f",
+                     triggered_samples_count, nontriggered_samples_count, trigger_ratio * 100, sq_th);
+            // get how many triggers we had the last interval. Reset counter.
+
+            triggered_samples_count = 0;
+            nontriggered_samples_count = 0;
+            if (trigger_ratio < 0.01) {
+                // trigger ratio very low, decrease threshold significantly:
+                sq_th /= 2;
+                log_info("Trigger ratio is very low at %f, setting threshold to %f", trigger_ratio, sq_th);
+            } else if (trigger_ratio < 0.5) {
+                // trigger ratio seems reasonable, update using noise_avg if the deviation from the current value is not too big:
+                float candidate = 1.3f * noise_avg;
+                /*if (candidate < 0.8 * sq_th) {
+                    sq_th = 0.8 * sq_th;
+                    log_info("Trigger ratio is %f, setting threshold to %f (80%)", trigger_ratio, sq_th);
+                }
+                else if (candidate > 1.2 * sq_th) {
+                    sq_th = 1.2 * sq_th;
+                    log_info("Trigger ratio is %f, setting threshold to %f (120%)", trigger_ratio, sq_th);
+                }
+                else {*/
+                sq_th = candidate;
+                log_info("Trigger ratio is %f, setting threshold to %f (1.3*noise_avg)", trigger_ratio, sq_th);
+                /*
+                }
+                 */
+            } else {
+                // Threshold way to low, increase significantly:
+                sq_th = 1.5 * sq_th;
+                log_info("Trigger ratio is very high at %f, setting threshold to %f", trigger_ratio, sq_th);
+
+            }
+        }
+    else  // if no automatic squelch is enabled, get value from manually set max_th
+    {
+        sq_th = max_th;
+    }
+
+    // calculate signal power and trigger if power level is bigger than threshold
+    double acc = 0;
+    int samples_over_thr_count = 0;
+    const int block_len = iq_frame->header->cpi_length; // TODO: block length <= CPI length, also: sub-packet squelch [Task 2]
+    log_debug("Received %d samples per channel", block_len);
+    for (int i = 0; i < block_len; i++) {
+      // Fast approximation of the magnitude of this sample
+      float mag = (fabsf(iq_frame->payload[i*2]  ) +
+                      fabsf(iq_frame->payload[i*2+1]));
+      if (mag > sq_th) {
+        samples_over_thr_count++;
+      }
+      acc += mag;
+    }
+
+    float trigger_ratio = (float) samples_over_thr_count / (float)block_len;
+    // Did this block have enough samples over the threshold? Arbitrarily set to 50% of block length
+    if (trigger_ratio > 20.0f/100.0f) {
+        // Triggered!
+        triggered_samples_count++;
+      log_debug("Output triggered. %d samples (%f %%) over threshold (%f, %f dB). Average magnitude: %f, long term average: %f",
+                samples_over_thr_count, trigger_ratio * 100, sq_th, 10 * log10f(sq_th), acc / block_len, noise_avg);
+
+      // Write the previous block, if configured
+      /* todo: reenable previous/following block squelch [Task 2]
+      if (options.padding_blocks) {
+        if (!triggered) {
+          fwrite(data == data_a?data_b:data_a, sizeof(uint8_t)*2,
+                 options.block_size, options.output_file);
+        }
+      }*/
+
+      // Even though the noise_avg should only contain information about background nosie, change with triggered values
+      // too, in case the trigger ratio is way off. However, limit influence by setting a low reduction factor.
+        if (pconfig->squelch_auto) {
+            // implement a moving average where previous values are slowly purged.
+            const float reduction_factor = 0.3f;
+            noise_avg = noise_avg + reduction_factor * acc / (double) block_len;
+            noise_avg /= (1 + reduction_factor);
+        }
+
+      // TODO: Sub-block squelch
+      return 0; // mark entire block as data!
+
+    } else { // Block was not over the threshold
+        nontriggered_samples_count++;
+        log_debug("Block not triggered. %d samples (%f %%) over threshold (%f, %f dB). Average magnitude: %f, long term average: %f",
+                  samples_over_thr_count, trigger_ratio * 100, sq_th, 10 * log10f(sq_th), acc / block_len, noise_avg);
+
+      // Write the block following the event, if configured
+      /* Todo Task 2
+      if (triggered) {
+        if (options.padding_blocks) {
+          fwrite(data, sizeof(uint8_t)*2, options.block_size, options.output_file);
+        }
+      }
+       */
+
+      // We try to only include blocks below the threshold in the average
+      // to understand the background noise level
+
+      if (pconfig->squelch_auto) {
+          // implement a moving average where previous values are slowly purged.
+          const float avg_factor = 0.8f;
+          noise_avg = avg_factor * noise_avg + acc / (double) block_len;
+          noise_avg /= (1 + avg_factor);
+      }
+
+      // triggered = false; TODO: Task 2
+    }
+#endif
+#ifdef NAIVE
+    // naive algorithm: trigger if one sample > threshold
     for(int n=scan_start;n<iq_frame->header->cpi_length*2;n+=2)
     {         
-        if( (iq_frame->payload[n] < min_th) | (iq_frame->payload[n] > max_th)){return n;}
-        if( (iq_frame->payload[n+1] < min_th) | (iq_frame->payload[n+1] > max_th)){return n;}
+        if( (iq_frame->payload[n] < min_th) | (iq_frame->payload[n] > max_th))
+        {
+            return n;
+    	}
+        if( (iq_frame->payload[n+1] < min_th) | (iq_frame->payload[n+1] > max_th))
+        {
+            return n;
+        }
     }
+#endif
     scan_start = iq_frame->header->cpi_length*2;
     return -1;
 }
@@ -267,6 +463,8 @@ int main(int argc, char* argv[])
     log_info("Channel number: %d", ch_num);
     log_info("Squelch threshold: %f ", squelch_threshold);
 
+    netconf_t netconf;
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
     /* Prepare input and output IQ frames */
     struct iq_frame_struct_32 * iq_frame_out = calloc(1, sizeof(struct iq_frame_struct_32));
     struct iq_frame_struct_32 * iq_frame_in  = calloc(1, sizeof(struct iq_frame_struct_32));
@@ -282,7 +480,7 @@ int main(int argc, char* argv[])
     int active_buff_ind_in = -1;
 	
 	succ= init_in_sm_buffer(input_sm_buff);
-    if (succ !=0) {FATAL_ERR("Failed to init shared memory interface")} 
+    if (succ !=0) {FATAL_ERR("Failed to init shared memory interface, exiting.")}
 	else{log_info("Input shared memory interface succesfully initialized");}
 
     /* Initializing output shared memory interface */
@@ -297,7 +495,7 @@ int main(int argc, char* argv[])
     int active_buff_ind_out = -1;    
 
     succ = init_out_sm_buffer(output_sm_buff);
-    if(succ !=0){FATAL_ERR("Shared memory initialization failed")}
+    if(succ !=0){FATAL_ERR("Shared memory initialization failed, exiting.")}
     else{log_info("Output shared memory interface succesfully initialized");}
 	
     /* Configuring squelch parameters */
@@ -355,7 +553,7 @@ int main(int argc, char* argv[])
                     {                 
                         if (triggered == 0)
                         {                            
-                            trigger_sample_offset = check_trigger(iq_frame_in); 
+                            trigger_sample_offset = check_trigger(iq_frame_in, &config);
                             if (trigger_sample_offset >= 0)
                             {
                                 log_debug("Triggered, sample offset: %d, [%d]",trigger_sample_offset, iq_frame_in->header->daq_block_index);
@@ -398,11 +596,10 @@ int main(int argc, char* argv[])
                         scan_start = iq_frame_in->header->cpi_length*2;
                     }
                     else if(iq_frame_out->payload_size == iq_frame_in->payload_size) // DATA or CAL frames
-                    { 
+                    {   
                         float timestamp_adjust = (float) (iq_frame_out->header->cpi_length*2-scan_start)/2*1000/iq_frame_out->header->sampling_freq;                        
                         log_debug("Timestamp adjust: %f ms", timestamp_adjust);                        
                         iq_frame_out->header->time_stamp -= (int) round(timestamp_adjust);
-
                         iq_frame_out->header->adc_overdrive_flags = adc_overdrive_flags;                        
                         adc_overdrive_flags = 0;
                         triggered     = 0;
@@ -430,6 +627,7 @@ int main(int argc, char* argv[])
                 log_trace("<--Transfering frame type: %d, daq ind:[%d]",iq_frame_out->header->frame_type, iq_frame_out->header->daq_block_index);
                 cpi_tracker = iq_frame_out->header->cpi_index;
                 send_ctr_buff_ready(output_sm_buff, active_buff_ind_out);
+                send_data(&netconf, iq_frame_out->payload, iq_frame_out->header->cpi_length, 2 * sizeof(float));
             }
                 
         }

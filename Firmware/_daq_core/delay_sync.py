@@ -24,12 +24,15 @@
 import logging
 import sys
 from struct import pack
+import math  # just for isnan...
 import numpy as np
 import numpy.linalg as lin
 from configparser import ConfigParser
 from iq_header import IQHeader
 from shmemIface import outShmemIface, inShmemIface
 from time import sleep
+
+import sqlite3, datetime
 
 class delaySynchronizer():
     
@@ -89,6 +92,9 @@ class delaySynchronizer():
         self.logger.setLevel(self.log_level)
         float_formatter = "{:.2f}".format
         np.set_printoptions(formatter={'float_kind':float_formatter})
+
+        self.logger.warning("Overwriting Log level to DEBUG")
+        self.logger.setLevel("DEBUG")
         
         self.iq_header = IQHeader()
         """
@@ -111,6 +117,18 @@ class delaySynchronizer():
         self.iq_corrections = np.ones(self.M, dtype=np.complex64) # This vector holds the IQ compensation values
         self.iq_diff_ref = np.ones(self.M, dtype=np.complex64) # Reference IQ difference vector used in the tracking mode
         
+        self.con = sqlite3.connect("../data/data.{}.db".format(datetime.datetime.now().isoformat()))
+        self.cur = self.con.cursor()
+        self.cur.execute(
+                         "CREATE TABLE data (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                         "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                         "header BLOB, "
+                         "ch1 BLOB, "
+                         "ch2 BLOB, "
+                         "ch3 BLOB, "
+                         "ch4 BLOB)"
+                         )
+
         self.logger.info("Delay synchronizer initialized")
     
     def _read_config_file(self, config_filename):
@@ -314,6 +332,7 @@ class delaySynchronizer():
             sample_sync_flag = False
             iq_sync_flag     = False
             sync_state       = 0
+            iq_samples = None  # initialize so we don't get a stupid python exception later goddamnit
 
             #############################################
             #           OBTAIN NEW DATA FRAME           #  
@@ -367,8 +386,8 @@ class delaySynchronizer():
             if (self.iq_header.frame_type != IQHeader.FRAME_TYPE_DUMMY):  # Check frame type
 
                 # -> IQ Preprocessing <-
-                # TODO: Check payload size
-                if incoming_payload_size > 0:
+                # TODO: Check payload size     
+                if incoming_payload_size > 0:            
                     if active_buffer_index_iq !=3:
                         iq_frame_buffer_out = (self.out_shmem_iface_iq.buffers[active_buffer_index_iq]).view(dtype=np.complex64)
                         # IQ header offset:1 sample -> 8 byte, 1024 byte length header -> 128 "sample"
@@ -423,7 +442,8 @@ class delaySynchronizer():
                         y_padd = np.concatenate([np_zeros, iq_samples[m, 0:self.N_proc]])
                         y_fft = np.fft.fft(y_padd)
                         self.corr_functions[m,:] = np.abs(np.fft.ifft(x_fft.conj() * y_fft))**2
-                    # ->  Calculate sample delays, check dynamic range
+                    # ->  Calculate sample delays (Not sub sample), check dynamic range
+                    # TODO subsample delay?
                     # WARNING: This dynamic range checking assumes dirac like coorelation peak                    
                     for m in self.channel_list:
                         peak_index = np.argmax(self.corr_functions[m, :])
@@ -432,12 +452,26 @@ class delaySynchronizer():
                         # TODO: Check overindexing
                         dyn_range = 10*np.log10(self.corr_functions[m, peak_index] / 
                                                  self.corr_functions[m, peak_index+self.corr_peak_offset])
+
+                        self.logger.debug("[Channel {}]: Correlation peak index: {:.2f}, dyn_range = {:.2f}".format(
+                            m, peak_index, dyn_range
+                        ))
+                        self.logger.debug(self.corr_functions[m, :])
                         if dyn_range < self.min_corr_peak_dyn_range:
                             self.logger.warning("Correlation peak dynamic range is insufficient to perform calibration")
                             self.logger.warning("Real value: {:.2f}, minimum: {:.2f}".format(dyn_range, self.min_corr_peak_dyn_range))
                             delay_update_flag = 0
                             sample_sync_flag = False # Sync can not be checked properly
                             break
+                        elif math.isnan(dyn_range):
+                            self.logger.warning("Correlation peak not found. Calculated peak intensity is NaN")
+                            delay_update_flag = 0
+                            sample_sync_flag = False  # Sync can not be checked properly
+                            break
+                        else:
+                            self.logger.debug("Correlateion peak found. Peak intensity: {:.2f}, minimum required intensity: {:.2f}".format(
+                                dyn_range, self.min_corr_peak_dyn_range
+                            ))
                         
                         # Calculate sample offset
                         self.delays[m] = (self.N_proc - peak_index)                        
@@ -472,9 +506,9 @@ class delaySynchronizer():
                 #
                 elif self.current_state == "STATE_IQ_CAL":
                     sync_state          = 4
-                    iq_corr_update_flag = False
-                    sample_sync_flag    = True
-                    iq_sync_flag        = True                
+                    iq_corr_update_flag = False  # True if correction necessary/available
+                    sample_sync_flag    = True   # True if samples _are_ in sync
+                    iq_sync_flag        = True   # True if subsamples _are_ in sync
                     
                     if self.en_iq_cal:
                         dyn_ranges, iq_diffs = self.calc_sync(iq_samples)
@@ -500,8 +534,8 @@ class delaySynchronizer():
                             self.iq_compensation_cntr+=1  # Used to track how many iq compensations have we issued so far
                             self.logger.info("Updating IQ correction values")                                        
                             self.iq_corrections *= iq_diffs
-                            self.logger.info("Amplitude differences: {0}".format(20*np.log10(np.abs(iq_diffs))))
-                            self.logger.info("Phase differernces: {0}".format(np.rad2deg(np.angle(iq_diffs))))
+                            self.logger.info("Amplitude differences: {0} (dB)".format(20*np.log10(np.abs(iq_diffs))))
+                            self.logger.info("Phase differernces: {0} (degree)".format(np.rad2deg(np.angle(iq_diffs))))
                     
                     if not sample_sync_flag:
                         self.current_state = "STATE_SAMPLE_CAL"
@@ -594,7 +628,7 @@ class delaySynchronizer():
             elif (self.iq_header.frame_type == IQHeader.FRAME_TYPE_DUMMY): 
                 # Reset instantaneous sync failed counter (New noise burst will start)
                 self.sync_failed_cntr = 0
-
+            
             #############################################   
             #         SEND PROCESSED DATA BLOCK         #  
             #############################################
@@ -609,7 +643,7 @@ class delaySynchronizer():
                 self.iq_header.iq_sync_flag=0
             
             self.iq_header.sync_state = sync_state
-
+            
             # -> Send IQ frame toward the iq server
             header_uint8 = np.frombuffer(self.iq_header.encode_header(), dtype=np.uint8)
             if active_buffer_index_iq !=3 :
@@ -625,6 +659,20 @@ class delaySynchronizer():
                 self.out_shmem_iface_hwc.send_ctr_buff_ready(active_buffer_index_hwc)
             else:
                 if not self.ignore_frame_drop_warning: self.logger.warning("Dropping frame - HWC, Total: {:d}".format(self.out_shmem_iface_hwc.dropped_frame_cntr))
+
+            if iq_samples is not None:
+                self.logger.debug("Inserting data. Size of header: {} bytes. Size of one channel: {} samples ({} bytes)"
+                                  .format(len(header_uint8), len(iq_samples_out[0, :]), len(iq_samples_out[0, :].tobytes()))
+                                  )
+                # save data block to DB
+                self.cur.execute("INSERT INTO data (header, ch1, ch2, ch3, ch4) VALUES (?, ?, ?, ?, ?) ", (
+                    header_uint8,
+                    iq_samples_out[0, :].tobytes(),
+                    iq_samples_out[1, :].tobytes(),
+                    iq_samples_out[2, :].tobytes(),
+                    iq_samples_out[3, :].tobytes()
+                ))
+                self.con.commit()
             
             # -> Inform the preceeding block that we have finished the processing
             self.in_shmem_iface.send_ctr_buff_ready(active_buff_index_dec)

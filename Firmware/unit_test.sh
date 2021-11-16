@@ -2,8 +2,8 @@
 echo "Start unit testing.."
 echo "Internal warnings are ignored"
 
-rm _testing/test_logs/*.log 2> /dev/NULL
-rm _testing/test_logs/*.html 2> /dev/NULL
+rm _testing/test_logs/*.log 2> /dev/null
+rm _testing/test_logs/*.html 2> /dev/null
 
 # Start unit test for the sync module
 #sudo python3 -m unittest -v _testing/unit_test/test_sync.py

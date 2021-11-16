@@ -15,46 +15,78 @@ class IQHeader():
     FRAME_TYPE_RAMP  = 2
     FRAME_TYPE_CAL   = 3
     FRAME_TYPE_TRIGW = 4
-    
+
     SYNC_WORD = 0x2bf7b95a
 
     def __init__(self):
-        
+
         self.logger = logging.getLogger(__name__)
         self.header_size = 1024 # size in bytes
-        self.reserved_bytes = 192        
+        self.reserved_bytes = 192
 
-        self.sync_word=self.SYNC_WORD        # uint32_t        
-        self.frame_type=0                    # uint32_t 
+        self.sync_word=self.SYNC_WORD        # uint32_t
+        self.frame_type=0                    # uint32_t
         self.hardware_id=""                  # char [16]
-        self.unit_id=0                       # uint32_t 
-        self.active_ant_chs=0                # uint32_t 
-        self.ioo_type=0                      # uint32_t 
-        self.rf_center_freq=0                # uint64_t 
-        self.adc_sampling_freq=0             # uint64_t 
-        self.sampling_freq=0                 # uint64_t 
-        self.cpi_length=0                    # uint32_t 
-        self.time_stamp=0                    # uint64_t 
+        self.unit_id=0                       # uint32_t
+        self.active_ant_chs=0                # uint32_t
+        self.ioo_type=0                      # uint32_t
+        self.rf_center_freq=0                # uint64_t
+        self.adc_sampling_freq=0             # uint64_t
+        self.sampling_freq=0                 # uint64_t
+        self.cpi_length=0                    # uint32_t
+        self.time_stamp=0                    # uint64_t
         self.daq_block_index=0               # uint32_t
-        self.cpi_index=0                     # uint32_t 
-        self.ext_integration_cntr=0          # uint64_t 
-        self.data_type=0                     # uint32_t 
-        self.sample_bit_depth=0              # uint32_t 
-        self.adc_overdrive_flags=0           # uint32_t 
+        self.cpi_index=0                     # uint32_t
+        self.ext_integration_cntr=0          # uint64_t
+        self.data_type=0                     # uint32_t
+        self.sample_bit_depth=0              # uint32_t
+        self.adc_overdrive_flags=0           # uint32_t
         self.if_gains=[0]*32                 # uint32_t x 32
         self.delay_sync_flag=0               # uint32_t
         self.iq_sync_flag=0                  # uint32_t
         self.sync_state=0                    # uint32_t
-        self.noise_source_state=0            # uint32_t        
+        self.noise_source_state=0            # uint32_t
         self.reserved=[0]*self.reserved_bytes# uint32_t x reserverd_bytes
-        self.header_version=0                # uint32_t 
+        self.header_version=0                # uint32_t
+
+    def __str__(self):
+        """
+            Prints out the content of the header in human readable format
+        """
+        s = ""
+        s += "Sync word: {:d}\n".format(self.sync_word)
+        s += "Header version: {:d}\n".format(self.header_version)
+        s += "Frame type: {:d}\n".format(self.frame_type)
+        s += "Hardware ID: {:16}\n".format(self.hardware_id)
+        s += "Unit ID: {:d}\n".format(self.unit_id)
+        s += "Active antenna channels: {:d}\n".format(self.active_ant_chs)
+        s += "Illuminator type: {:d}\n".format(self.ioo_type)
+        s += "RF center frequency: {:.2f} MHz\n".format(self.rf_center_freq / 10 ** 6)
+        s += "ADC sampling frequency: {:.2f} MHz\n".format(self.adc_sampling_freq / 10 ** 6)
+        s += "IQ sampling frequency {:.2f} MHz\n".format(self.sampling_freq / 10 ** 6)
+        s += "CPI length: {:d}\n".format(self.cpi_length)
+        s += "Unix Epoch timestamp: {:d}\n".format(self.time_stamp)
+        s += "DAQ block index: {:d}\n".format(self.daq_block_index)
+        s += "CPI index: {:d}\n".format(self.cpi_index)
+        s += "Extended integration counter {:d}\n".format(self.ext_integration_cntr)
+        s += "Data type: {:d}\n".format(self.data_type)
+        s += "Sample bit depth: {:d}\n".format(self.sample_bit_depth)
+        s += "ADC overdrive flags: {:d}\n".format(self.adc_overdrive_flags)
+        for m in range(32):
+            s += "Ch: {:d} IF gain: {:.1f} dB\n".format(m, self.if_gains[m] / 10)
+        s += "Delay sync  flag: {:d}\n".format(self.delay_sync_flag)
+        s += "IQ sync  flag: {:d}\n".format(self.iq_sync_flag)
+        s += "Sync state: {:d}\n".format(self.sync_state)
+        s += "Noise source state: {:d}\n".format(self.noise_source_state)
+        return s
+
 
     def decode_header(self, iq_header_byte_array):
         """
             Unpack,decode and store the content of the iq header
         """
         iq_header_list = unpack("II16sIIIQQQIQIIQIII"+"I"*32+"IIII"+"I"*self.reserved_bytes+"I", iq_header_byte_array)
-        
+
         self.sync_word            = iq_header_list[0]
         self.frame_type           = iq_header_list[1]
         self.hardware_id          = iq_header_list[2].decode()
@@ -75,7 +107,7 @@ class IQHeader():
         self.if_gains             = iq_header_list[17:49]
         self.delay_sync_flag      = iq_header_list[49]
         self.iq_sync_flag         = iq_header_list[50]
-        self.sync_state           = iq_header_list[51]  
+        self.sync_state           = iq_header_list[51]
         self.noise_source_state   = iq_header_list[52]
         self.header_version       = iq_header_list[52+self.reserved_bytes+1]
 
@@ -87,7 +119,7 @@ class IQHeader():
         iq_header_byte_array+=self.hardware_id.encode()+bytearray(16-len(self.hardware_id.encode()))
         iq_header_byte_array+=pack("IIIQQQIQIIQIII",
                                 self.unit_id, self.active_ant_chs, self.ioo_type, self.rf_center_freq, self.adc_sampling_freq,
-                                self.sampling_freq, self.cpi_length, self.time_stamp, self.daq_block_index, self.cpi_index, 
+                                self.sampling_freq, self.cpi_length, self.time_stamp, self.daq_block_index, self.cpi_index,
                                 self.ext_integration_cntr, self.data_type, self.sample_bit_depth, self.adc_overdrive_flags)
         for m in range(32):
             iq_header_byte_array+=pack("I", self.if_gains[m])
@@ -107,31 +139,8 @@ class IQHeader():
         """
             Prints out the content of the header in human readable format
         """
-        self.logger.info("Sync word: {:d}".format(self.sync_word))        
-        self.logger.info("Header version: {:d}".format(self.header_version))        
-        self.logger.info("Frame type: {:d}".format(self.frame_type))
-        self.logger.info("Hardware ID: {:16}".format(self.hardware_id))
-        self.logger.info("Unit ID: {:d}".format(self.unit_id))
-        self.logger.info("Active antenna channels: {:d}".format(self.active_ant_chs))
-        self.logger.info("Illuminator type: {:d}".format(self.ioo_type))
-        self.logger.info("RF center frequency: {:.2f} MHz".format(self.rf_center_freq/10**6))
-        self.logger.info("ADC sampling frequency: {:.2f} MHz".format(self.adc_sampling_freq/10**6))
-        self.logger.info("IQ sampling frequency {:.2f} MHz".format(self.sampling_freq/10**6))
-        self.logger.info("CPI length: {:d}".format(self.cpi_length))
-        self.logger.info("Unix Epoch timestamp: {:d}".format(self.time_stamp))
-        self.logger.info("DAQ block index: {:d}".format(self.daq_block_index))
-        self.logger.info("CPI index: {:d}".format(self.cpi_index))
-        self.logger.info("Extended integration counter {:d}".format(self.ext_integration_cntr))
-        self.logger.info("Data type: {:d}".format(self.data_type))
-        self.logger.info("Sample bit depth: {:d}".format(self.sample_bit_depth))
-        self.logger.info("ADC overdrive flags: {:d}".format(self.adc_overdrive_flags))    
-        for m in range(32):
-            self.logger.info("Ch: {:d} IF gain: {:.1f} dB".format(m, self.if_gains[m]/10))
-        self.logger.info("Delay sync  flag: {:d}".format(self.delay_sync_flag))
-        self.logger.info("IQ sync  flag: {:d}".format(self.iq_sync_flag))
-        self.logger.info("Sync state: {:d}".format(self.sync_state))
-        self.logger.info("Noise source state: {:d}".format(self.noise_source_state))
-    
+        self.logger.info(self.__str__())
+
     def check_sync_word(self):
         """
             Check the sync word of the header
@@ -140,3 +149,14 @@ class IQHeader():
             return -1
         else:
             return 0
+
+    def get_data_dict(self):
+        dict_header = dict(self.__dict__)  # dict() copies dictionary OTHERWISE THIS WILL BREAK STUPID PYTHON WHAT THE FUKK)
+        del dict_header['logger']
+        del dict_header['reserved']
+        # Remove all but 4 IF gains to avoid issues with tuple conversion in PMT. Throw error if any nonzero value would be discarded
+        # use any() to check for nonzero values at index 4 or higher:
+        if any(dict_header["if_gains"][4:]):
+            raise RuntimeWarning("Nonzero IF Gains will be discarded. list is: {}".format(dict_header["if_gains"]))
+        dict_header["if_gains"] = dict_header["if_gains"][:4]
+        return dict_header

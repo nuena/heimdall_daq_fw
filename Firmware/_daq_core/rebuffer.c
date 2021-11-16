@@ -42,6 +42,7 @@
 #include "ini.h"
 #include "iq_header.h"
 #include "sh_mem_util.h"
+#include "krakenudp.h"
 
 #define INI_FNAME "daq_chain_config.ini"
 #define FATAL_ERR(l) log_fatal(l); return -1;
@@ -57,6 +58,8 @@ typedef struct
     int daq_buffer_size;
     int decimation_ratio;    
     int log_level;      
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 /*
@@ -69,17 +72,37 @@ static int handler(void* conf_struct, const char* section, const char* name,
 
     #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
     if (MATCH("hw", "num_ch"))
-    {pconfig->num_ch = atoi(value);}
-    else if (MATCH("calibration", "corr_size"))
-    {pconfig->cal_size = atoi(value);}
+    {
+        pconfig->num_ch = atoi(value);
+    }
+	else if (MATCH("calibration", "corr_size"))
+    {
+		pconfig->cal_size = atoi(value);
+    }
     else if (MATCH("daq", "daq_buffer_size"))
-    {pconfig->daq_buffer_size = atoi(value);}
+    {
+        pconfig->daq_buffer_size = atoi(value);
+    }
     else if (MATCH("pre_processing", "decimation_ratio")) 
-    {pconfig->decimation_ratio = atoi(value);}
+    {
+        pconfig->decimation_ratio = atoi(value);
+    }
     else if (MATCH("pre_processing", "cpi_size")) 
-    {pconfig->cpi_size = atoi(value);}
+    {
+        pconfig->cpi_size = atoi(value);
+    }
     else if (MATCH("daq", "log_level"))
-    {pconfig->log_level = atoi(value);}
+    {
+        pconfig->log_level = atoi(value);
+    }
+	else if (MATCH("rebuffer", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("rebuffer", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
+    }
     else {return 0;  /* unknown section/name, error */}
     return 0;
 }
@@ -126,7 +149,7 @@ int main(int argc, char* argv[])
         log_fatal("Configuration could not be loaded, exiting ..");
         return -2;
     }   
-    in_buffer_size  = config.daq_buffer_size;
+    in_buffer_size = config.daq_buffer_size;
     out_buffer_size = config.cpi_size * config.decimation_ratio;
     cal_out_buffer_size = config.cal_size; 
     active_out_buffer_size = 0;
@@ -170,7 +193,10 @@ int main(int argc, char* argv[])
     strcpy(output_sm_buff->bw_ctr_fifo_name, DECIMATOR_IN_BW_FIFO);
 
     succ = init_out_sm_buffer(output_sm_buff);
-    if(succ !=0){FATAL_ERR("Shared memory initialization failed")}
+    if(succ !=0){FATAL_ERR("Shared memory initialization failed. Exiting.")}
+
+    netconf_t netconf;
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
 	
     /*
      *
@@ -264,7 +290,7 @@ int main(int argc, char* argv[])
             switch(active_buff_ind)
             { 
                 case 0:
-                case 1:
+                case 1:                
                     active_out_buffer_size=0;
                     frame_ptr = output_sm_buff->shm_ptr[active_buff_ind];                        
                     
@@ -319,6 +345,7 @@ int main(int argc, char* argv[])
                             struct circ_buffer_struct *cbuff_m = &circ_buff_structs[m];
                             offset = IQ_HEADER_LENGTH/(sizeof(uint8_t)) + m*active_out_buffer_size*2;
                             memcpy(frame_ptr+offset, cbuff_m->iq_circ_buffer+wr_offset, active_out_buffer_size*2);
+send_data(&netconf, cbuff_m->iq_circ_buffer + wr_offset, out_buffer_size, 2*sizeof(uint8_t) );
                         }
                         wr_offset += active_out_buffer_size*2;
                         wr_offset = wr_offset % (buffer_num * in_buffer_size*2);                    
@@ -333,6 +360,10 @@ int main(int argc, char* argv[])
                             offset = IQ_HEADER_LENGTH/(sizeof(uint8_t)) + m*active_out_buffer_size*2;
                             memcpy(frame_ptr+offset, cbuff_m->iq_circ_buffer+wr_offset, chunk_size);
                             memcpy(frame_ptr+offset+chunk_size, cbuff_m->iq_circ_buffer, chunk_size_2);
+
+                            send_data(&netconf, cbuff_m->iq_circ_buffer+wr_offset, chunk_size, sizeof(uint8_t));
+                            send_data(&netconf, cbuff_m->iq_circ_buffer, chunk_size_2, sizeof(uint8_t));
+
                         }
                         wr_offset = chunk_size_2;
                     }   

@@ -47,10 +47,11 @@
 #include "rtl-sdr.h"
 #include "rtl_daq.h"
 #include "iq_header.h"
+#include "krakenudp.h"
 
 #define NUM_BUFF 8  // Number of buffers used in the circular, coherent read buffer
 #define CFN "_data_control/rec_control_fifo" // Receiver control FIFO name 
-#define ASYNC_BUF_NUMBER 12// Number of buffers used by the asynchronous read 
+#define ASYNC_BUF_NUMBER     12// Number of buffers used by the asynchronous read 
 
 #define INI_FNAME "daq_chain_config.ini"
 
@@ -83,6 +84,11 @@ struct timeval frame_time_stamp;
 static int ctr_channel_index;
 
 /*
+ * This enum allows for saving to file, or reading from stdin instead of RTL
+ */
+enum operation_mode {NORMAL = 0, SAVE = 1, PLAYBACK = 2};
+
+/*
  * This structure stores the configuration parameters, 
  * that are loaded from the ini file
  */ 
@@ -100,7 +106,12 @@ typedef struct
     const char* hw_name;
     int hw_unit_id;
     int ioo_type;
+    const char * udp_addr;
+    uint16_t udp_port;
+    int udp_channel_index;
+    enum operation_mode opmode;
 } configuration;
+
 
 /*
  * Ini configuration parser callback function  
@@ -112,31 +123,70 @@ static int handler(void* conf_struct, const char* section, const char* name,
 
     #define MATCH(s, n) strcmp(section, s) == 0 && strcmp(name, n) == 0
     if (MATCH("hw", "num_ch")) 
-        {pconfig->num_ch = atoi(value);}
+    {
+        pconfig->num_ch = atoi(value);
+    }
     else if (MATCH("hw","name"))
-        {pconfig->hw_name = strdup(value);}
+    {
+        pconfig->hw_name = strdup(value);
+    }
     else if (MATCH("hw","unit_id"))
-        {pconfig->hw_unit_id = atoi(value);}
+    {
+        pconfig->hw_unit_id = atoi(value);
+    }
     else if (MATCH("hw", "ioo_type"))
-        {pconfig->ioo_type = atoi(value);}
-    else if (MATCH("hw","en_bias_tee"))
-        {pconfig->en_bias_tee_str = strdup(value);}
+    {
+        pconfig->ioo_type = atoi(value);
+    }
+	else if (MATCH("hw","en_bias_tee"))
+    {
+		pconfig->en_bias_tee_str = strdup(value);
+	}
     else if (MATCH("daq", "daq_buffer_size"))
-        {pconfig->daq_buffer_size = atoi(value);} 
+    {
+        pconfig->daq_buffer_size = atoi(value);
+    } 
     else if (MATCH("daq", "sample_rate")) 
-        {pconfig->sample_rate = atoi(value);} 
+    {
+        pconfig->sample_rate = atoi(value);
+    } 
     else if (MATCH("daq", "center_freq")) 
-        {pconfig->center_freq = atoi(value);} 
+    {
+        pconfig->center_freq = atoi(value);
+    } 
     else if (MATCH("daq", "gain")) 
-        {pconfig->gain = atoi(value);} 
+    {
+        pconfig->gain = atoi(value);
+    } 
     else if (MATCH("daq", "en_noise_source_ctr")) 
-        {pconfig->en_noise_source_ctr = atoi(value);}
+    {
+        pconfig->en_noise_source_ctr = atoi(value);
+    }
     else if (MATCH("daq", "ctr_channel_serial_no"))
-        {pconfig->ctr_channel_serial_no = atoi(value);}
+    {
+        pconfig->ctr_channel_serial_no = atoi(value);
+    }
     else if (MATCH("daq", "log_level")) 
-        {pconfig->log_level = atoi(value);}
-    else 
-        {return 0;}  /* unknown section/name, error */
+    {
+        pconfig->log_level = atoi(value);
+    }
+	else if (MATCH("daq", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("daq", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
+    }
+    else if (MATCH("daq", "udp_channel_index")) {
+        pconfig->udp_channel_index = atoi(value);
+    }
+    else if (MATCH("daq", "operation_mode")) {
+        pconfig->opmode = atoi(value);
+    }
+    else {
+        return 0;  /* unknown section/name, error */
+    }
     return 0;
 }
 
@@ -388,7 +438,26 @@ int main( int argc, char** argv )
     {
         log_fatal("Configuration could not be loaded, exiting ..");
         return -1;
-    }   
+    }
+
+    FILE * outfile = NULL;
+    if(config.opmode == SAVE) {
+        // get string with current time in ISO 8601:
+        struct timeval tv;
+        struct tm tm;
+        char timestamp[] = "YYYY-MM-dd_HH:mm:ss";
+        gettimeofday(&tv, NULL);
+
+        /* convert to time to 'struct tm' for use with strftime */
+        localtime_r(&tv.tv_sec, &tm);
+
+        /* format the time */
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d_%H:%M:%S", &tm);
+        char filename[50];
+        sprintf(filename, "rtl_data-%s.bin", timestamp);
+        outfile = fopen(filename, "w");
+        log_info("Writing data to %s", filename);
+    }    
     buffer_size = config.daq_buffer_size*2;
     ch_no = config.num_ch;
     
@@ -411,6 +480,8 @@ int main( int argc, char** argv )
         log_info("Noise source control: enabled");
     else
         log_info("Noise source control: disabled");    
+	
+	log_info("Operation mode is %d", config.opmode);
     
     /* Get control channel device index */
     char dev_serial[16];
@@ -422,13 +493,14 @@ int main( int argc, char** argv )
         log_warn("Set to default device index: 0");
         ctr_channel_dev_index=0;
     }
-
+    
     /* Allocation */    
     struct iq_header_struct* iq_header = calloc(1, sizeof(struct iq_header_struct));
     
     new_gains=calloc(ch_no, sizeof(*new_gains));
     
-    rtl_receivers = malloc(sizeof(struct rtl_rec_struct)*ch_no);    
+    rtl_receivers = malloc(sizeof(struct rtl_rec_struct)*ch_no);
+
     for(int i=0; i<ch_no; i++)
     {
         struct rtl_rec_struct *rtl_rec = &rtl_receivers[i];
@@ -446,6 +518,9 @@ int main( int argc, char** argv )
     }
 
    
+	netconf_t netconf;
+    open_socket(&netconf, config.udp_addr, config.udp_port, "");
+
     // Initialization
     for(int i=0; i<ch_no; i++)
     {
@@ -519,7 +594,6 @@ int main( int argc, char** argv )
         struct rtl_rec_struct *rtl_rec = &rtl_receivers[ctr_channel_index];                        
         rtlsdr_set_gpio(rtl_rec->dev, en_bias_tee[m] , m+1);
     }
-
     pthread_barrier_init(&rtl_init_barrier, NULL, ch_no);
     /* Spawn reader threads */
     for(int i=0; i<ch_no; i++)
@@ -557,7 +631,7 @@ int main( int argc, char** argv )
              *---------------------
              *  Complete IQ header 
              *---------------------
-            */
+            */                        
             // Acquire local time in ms (Unix EPOC) and set timestamp field
             gettimeofday(&frame_time_stamp, NULL);                    
             uint64_t time_stamp_ms = (uint64_t)(frame_time_stamp.tv_sec) * 1000 +
@@ -594,7 +668,7 @@ int main( int argc, char** argv )
                 iq_header->data_type=1;
                 if (noise_source_state ==1) // Calibration frame
                 {
-                    iq_header->frame_type=FRAME_TYPE_CAL;
+                    iq_header->frame_type=FRAME_TYPE_CAL;                    
                 }
                 else // Normal data frame
                 {
@@ -618,12 +692,21 @@ int main( int argc, char** argv )
                     rtl_rec = &rtl_receivers[i];
                     rd_buff_ind = read_buff_ind % NUM_BUFF;                                              
                     fwrite(rtl_rec->buffer + buffer_size * rd_buff_ind, 1, buffer_size, stdout);                
+                    if(config.udp_channel_index < 0 || config.udp_channel_index == i) {
+                        send_data(&netconf, rtl_rec->buffer + buffer_size * rd_buff_ind, buffer_size, sizeof(uint8_t));
+                    }
+                    if(config.opmode == SAVE) {
+                        fwrite(rtl_rec->buffer, sizeof(uint8_t), buffer_size, outfile);
+                    }
                 }
             }
             if(overdrive_flags !=0)
                 log_warn("Overdrive detected, flags: 0x%02X", overdrive_flags);
 
             fflush(stdout);
+            if(config.opmode == SAVE) {
+                fflush(outfile);
+            }
             overdrive_flags=0;
             read_buff_ind ++;
             if (en_dummy_frame)

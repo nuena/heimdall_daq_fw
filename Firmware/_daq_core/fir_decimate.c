@@ -40,6 +40,8 @@
 #include "NE10.h"
 #else
 #include <kfr/capi.h>
+#include "krakenudp.h"
+
 #endif
 
 #define DC 127.5
@@ -60,6 +62,8 @@ typedef struct
     int en_filter_reset;
     int tap_size;
     int log_level;
+    const char * udp_addr;
+    uint16_t udp_port;
 } configuration;
 
 /*
@@ -84,6 +88,14 @@ static int handler(void* conf_struct, const char* section, const char* name,
     {pconfig->tap_size = atoi(value);}
     else if (MATCH("daq", "log_level")) 
     {pconfig->log_level = atoi(value);}
+    else if (MATCH("decimate", "udp_addr"))
+    {
+        pconfig->udp_addr = strdup(value);
+    }
+    else if (MATCH("decimate", "udp_port"))
+    {
+        pconfig->udp_port = atoi(value);
+    }
     else {return 0;  /* unknown section/name, error */}
     return 0;
 }
@@ -99,16 +111,16 @@ int main(int argc, char **argv)
     log_set_level(LOG_TRACE);
     configuration config;
     bool filter_reset;
-    uint32_t expected_frame_index=-1;
-    int ch_no,dec;     
-    int exit_flag=0;
-    int active_buff_ind = 0, active_buff_ind_in=0;
+    uint32_t expected_frame_index = -1;
+    int ch_no, dec;
+    int exit_flag = 0;
+    int active_buff_ind = 0, active_buff_ind_in = 0;
     bool drop_mode = true;
     
-    struct iq_header_struct* iq_header;
+    struct iq_header_struct *iq_header;
     uint8_t *input_data_buffer;
     /* Set drop mode from the command prompt*/    
-    if (argc == 2){drop_mode = atoi(argv[1]);}
+    if (argc == 2) { drop_mode = atoi(argv[1]); }
     
     /* Set parameters from the config file*/
     if (ini_parse(INI_FNAME, handler, &config) < 0) {FATAL_ERR("Configuration could not be loaded, exiting ..")}
@@ -123,6 +135,13 @@ int main(int argc, char **argv)
     log_info("CPI size: %d", config.cpi_size);
     log_info("Calibration sample size : %d", config.cal_size);
     
+    netconf_t netconf;
+    if( !open_socket(&netconf, config.udp_addr, config.udp_port, "fir_decimate"))
+    {
+        log_warn("Something seems to have gone wrong when opening UDP port");
+    } else {
+        log_info("Connected to socket");
+    }
                 
     /*
     *-------------------------------------
@@ -207,7 +226,11 @@ int main(int argc, char **argv)
 
     /* Initialize Filter taps */
     FILE * fir_coeff_fd =fopen(FIR_COEFF, "r");
-    if (fir_coeff_fd == NULL) {FATAL_ERR("Failed to open FIR coefficient file")}
+    if (fir_coeff_fd == NULL) {
+        FATAL_ERR("Failed to open FIR coefficient file, exiting")
+    } else {
+        log_info("Sucessfully opened FIR coefficient file %s", FIR_COEFF);
+    }
     int k=0;
     while (fscanf(fir_coeff_fd, "%f", &fir_coeffs[k++]) != EOF);
     if (k-1==tap_size){log_info("FIR filter coefficienrs are initialized, tap size: %d",k-1);}
@@ -224,18 +247,26 @@ int main(int argc, char **argv)
 		
         // Acquire data buffer on the shared memory interface
         active_buff_ind_in = wait_buff_ready(input_sm_buff);
-        if (active_buff_ind_in < 0 ){exit_flag = 1; break;}
-        if (active_buff_ind_in == TERMINATE) {exit_flag = TERMINATE; break;}
+        if (active_buff_ind_in < 0) {
+            exit_flag = 1;
+            break;
+        }
+        if (active_buff_ind_in == TERMINATE) {
+            exit_flag = TERMINATE;
+            break;
+        }
         iq_header = (struct iq_header_struct*) input_sm_buff->shm_ptr[active_buff_ind_in];
-		input_data_buffer = ((uint8_t *) input_sm_buff->shm_ptr[active_buff_ind_in] )+ IQ_HEADER_LENGTH/sizeof(uint8_t);
-        CHK_SYNC_WORD(check_sync_word(iq_header));
+        input_data_buffer =
+                ((uint8_t *) input_sm_buff->shm_ptr[active_buff_ind_in]) + IQ_HEADER_LENGTH / sizeof(uint8_t);
+        CHK_SYNC_WORD(check_sync_word(iq_header));        
         
-        if (expected_frame_index == -1)
-        {expected_frame_index = iq_header->daq_block_index;}
+        if (expected_frame_index == -1) {
+            expected_frame_index = iq_header->daq_block_index;
+        }
 
-        if (expected_frame_index != iq_header->daq_block_index)
-        {
-            log_warn("Frame index missmatch. Expected %d <--> %d Received",expected_frame_index,iq_header->daq_block_index);
+        if (expected_frame_index != iq_header->daq_block_index) {
+            log_warn("Frame index missmatch. Expected %d <--> %d Received", expected_frame_index,
+                     iq_header->daq_block_index);
             expected_frame_index = iq_header->daq_block_index;
         }
         expected_frame_index += dec;
@@ -243,84 +274,87 @@ int main(int argc, char **argv)
         
         /*Acquire buffer from the sink block*/
         active_buff_ind = wait_buff_free(output_sm_buff);        
-        switch(active_buff_ind)
-        {
+        switch (active_buff_ind) {
         	case 0:
         	case 1:
-                log_trace("--> Frame received: type: %d, daq ind:[%d]",iq_header->frame_type, iq_header->daq_block_index);
+                log_trace("--> Frame received: type: %d, daq ind:[%d]", iq_header->frame_type,
+                          iq_header->daq_block_index);
                 frame_ptr = output_sm_buff->shm_ptr[active_buff_ind];
-                float* output_data_buffer = ((float *) output_sm_buff->shm_ptr[active_buff_ind] )+ IQ_HEADER_LENGTH/sizeof(float);
+                float *output_data_buffer =
+                        ((float *) output_sm_buff->shm_ptr[active_buff_ind]) + IQ_HEADER_LENGTH / sizeof(float);
+                float * begin_of_data_buffer = output_data_buffer;
                 /* Place IQ header into the output buffer*/
                 memcpy(frame_ptr, iq_header,1024);                
 
                 /* Update header fields */
-                iq_header = (struct iq_header_struct*) frame_ptr;
+                iq_header = (struct iq_header_struct*) frame_ptr;                       
+                iq_header->sampling_freq = iq_header->adc_sampling_freq / (uint64_t) dec;            
+                iq_header->cpi_length = (uint32_t) iq_header->cpi_length/dec; 
                 iq_header->data_type = 3; // Data type is decimated IQ            
                 iq_header->sample_bit_depth = 32; // Complex float 32
                 iq_header->cpi_index = cpi_index;
-
+                
                 if (iq_header->frame_type==FRAME_TYPE_DATA)
                 {
                     iq_header->sampling_freq = iq_header->adc_sampling_freq / (uint64_t) dec;
                     iq_header->cpi_length = (uint32_t) iq_header->cpi_length/dec; 
                 
                     /* Perform filtering on data type frames*/
-                    if (iq_header->cpi_length > 0)
-                    {
-                        if (filter_reset)
-                            #ifdef ARM_NEON
-                                {for(int m=0;m<ch_no*2;m++){memset(fir_state_vectors[m], 0, (tap_size+fir_blocksize-1)*sizeof(ne10_float32_t));}}
-                            #else
-                                log_warn("Filter reset is not yet implemented on X86 platform");
-                            #endif
-                        for(int ch_index=0;ch_index<iq_header->active_ant_chs;ch_index++)                    
-                        {
-                            #ifndef ARM_NEON
-                                // For downsampling  - X86
-                                int out_sample_index=0; 
-                                int dec_index = 0; 
-                            #endif
-                            //De-interleaving input data
+                if (iq_header->cpi_length > 0)
+                {
+                    if (filter_reset)
+                        #ifdef ARM_NEON
+                            {for(int m=0;m<ch_no*2;m++){memset(fir_state_vectors[m], 0, (tap_size+fir_blocksize-1)*sizeof(ne10_float32_t));}}
+                        #else
+                            log_warn("Filter reset is not yet implemented on X86 platform");
+                        #endif
+                    for (int ch_index = 0; ch_index < iq_header->active_ant_chs; ch_index++) {
+                        #ifndef ARM_NEON
+                            // For downsampling  - X86
+                            int out_sample_index=0; 
+                            int dec_index = 0; 
+                        #endif
+                        //De-interleaving input data
                             for(int sample_index=0; sample_index<iq_header->cpi_length*dec; sample_index++)
                             {
                                 fir_input_buffer_i[sample_index] = (input_data_buffer[2*sample_index]-DC)/DC;   // I
                                 fir_input_buffer_q[sample_index] = (input_data_buffer[2*sample_index+1]-DC)/DC; // Q
-                            }
-                            // Perform filtering
-                            #ifdef ARM_NEON
-                                for (int b = 0; b < iq_header->cpi_length*dec/fir_blocksize; b++)
-                                {
-                                    ne10_fir_decimate_float_c(&fir_cfgs[2*ch_index], fir_input_buffer_i + (b * fir_blocksize), fir_output_buffer_i + (b * config.cpi_size), fir_blocksize);
-                                    ne10_fir_decimate_float_c(&fir_cfgs[2*ch_index+1], fir_input_buffer_q + (b * fir_blocksize), fir_output_buffer_q + (b * config.cpi_size), fir_blocksize);
-                                }    
-                            #else
-                                kfr_filter_process_f32(fir_filter_plan, fir_output_buffer_i, fir_input_buffer_i, iq_header->cpi_length*dec);
-                                kfr_filter_process_f32(fir_filter_plan, fir_output_buffer_q, fir_input_buffer_q, iq_header->cpi_length*dec);                        
-                            #endif
+                        }
+                        // Perform filtering
+                        #ifdef ARM_NEON
+                            for (int b = 0; b < iq_header->cpi_length*dec/fir_blocksize; b++)
+                            {
+                                ne10_fir_decimate_float_c(&fir_cfgs[2*ch_index], fir_input_buffer_i + (b * fir_blocksize), fir_output_buffer_i + (b * config.cpi_size), fir_blocksize);
+                                ne10_fir_decimate_float_c(&fir_cfgs[2*ch_index+1], fir_input_buffer_q + (b * fir_blocksize), fir_output_buffer_q + (b * config.cpi_size), fir_blocksize);
+                            }    
+                        #else
+                        kfr_filter_process_f32(fir_filter_plan, fir_output_buffer_i, fir_input_buffer_i,
+                                               iq_header->cpi_length * dec);
+                        kfr_filter_process_f32(fir_filter_plan, fir_output_buffer_q, fir_input_buffer_q,
+                                               iq_header->cpi_length * dec);
+                        #endif
 
-                            //Re-interleave output data on ARM devices
-                            #ifdef ARM_NEON
-                                for(int sample_index=0; sample_index<iq_header->cpi_length; sample_index++)
-                                {
-                                    output_data_buffer[2*sample_index]   = fir_output_buffer_i[sample_index];
-                                    output_data_buffer[2*sample_index+1] = fir_output_buffer_q[sample_index];
+                        //Re-interleave output data on ARM devices
+                        #ifdef ARM_NEON
+                            for(int sample_index=0; sample_index<iq_header->cpi_length; sample_index++)
+                            {
+                                output_data_buffer[2*sample_index]   = fir_output_buffer_i[sample_index];
+                                output_data_buffer[2*sample_index+1] = fir_output_buffer_q[sample_index];
+                            }
+                        #else
+                        //Downsample and re-interleave output data on X86
+                        for (int sample_index = 0; sample_index < iq_header->cpi_length * dec; sample_index++) {
+                                dec_index  = (dec_index+1)%dec; // when zero the sample is forwarded
+                            if (dec_index == 0) {
+                                    output_data_buffer[out_sample_index]   = fir_output_buffer_i[sample_index];
+                                    output_data_buffer[out_sample_index+1] = fir_output_buffer_q[sample_index];
+                                    out_sample_index+=2;
                                 }
-                            #else
-                            //Downsample and re-interleave output data on X86
-                                for(int sample_index=0; sample_index<iq_header->cpi_length*dec; sample_index++)
-                                {
-                                    dec_index  = (dec_index+1)%dec; // when zero the sample is forwarded
-                                    if(dec_index==0)
-                                    {
-                                        output_data_buffer[out_sample_index]   = fir_output_buffer_i[sample_index];
-                                        output_data_buffer[out_sample_index+1] = fir_output_buffer_q[sample_index];
-                                        out_sample_index+=2;
-                                    }
-                                }                            
-                            #endif
-                            input_data_buffer  += 2*iq_header->cpi_length*dec;
-                            output_data_buffer += 2*iq_header->cpi_length;
-                        }                                     
+                            }                            
+                        #endif
+                        input_data_buffer  += 2*iq_header->cpi_length*dec;
+                        output_data_buffer += 2*iq_header->cpi_length;
+                    }                                     
                     }
                                 }
                 else if (iq_header->frame_type==FRAME_TYPE_CAL)
@@ -337,8 +371,12 @@ int main(int argc, char **argv)
                         }
 
                 }
-                log_trace("<--Transfering frame type: %d, daq ind:[%d]",iq_header->frame_type, iq_header->daq_block_index);
+                log_trace("<--Transfering frame type: %d, daq ind:[%d]", iq_header->frame_type,
+                          iq_header->daq_block_index);
                 send_ctr_buff_ready(output_sm_buff, active_buff_ind);                
+
+
+                send_data(&netconf, begin_of_data_buffer, iq_header->cpi_length, sizeof(float) * 2);
                 break;
         	case 3:
             	/* Frame drop*/
@@ -349,6 +387,7 @@ int main(int argc, char **argv)
         }
         send_ctr_buff_free(input_sm_buff, active_buff_ind_in);
     } // End of the main processing loop
+    log_info("Exited main loop. Starting cleanup!");
     error_code_log(exit_flag);
     send_ctr_terminate(output_sm_buff);
     sleep(3);    
