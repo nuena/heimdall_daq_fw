@@ -80,6 +80,17 @@ class IQHeader():
         s += "Noise source state: {:d}\n".format(self.noise_source_state)
         return s
 
+    def get_summary(self, separator='\t'):
+        """
+        Returns a string with the most important fields.
+
+        """
+        s =  "DAQ block index: {:d}{}".format(self.daq_block_index, separator)
+        s += "CPI index: {:d}{}".format(self.cpi_index, separator)
+        s += "Frame type: {:d}{}".format(self.frame_type, separator)
+        s += "Unix Epoch timestamp: {:d}{}".format(self.time_stamp, separator)
+        s += "\n"  # finalize with a newline
+        return s
 
     def decode_header(self, iq_header_byte_array):
         """
