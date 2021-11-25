@@ -40,8 +40,6 @@
 #include "NE10.h"
 #else
 #include <kfr/capi.h>
-#include "krakenudp.h"
-
 #endif
 
 #define DC 127.5
@@ -49,6 +47,9 @@
 #define FIR_COEFF "_data_control/fir_coeffs.txt"
 #define FATAL_ERR(l) log_fatal(l); return -1;
 #define CHK_MALLOC(m) if(m==NULL){log_fatal("Malloc failed, exiting.."); return -1;}
+
+#include "krakenudp.h"
+
 /* 
  * This structure stores the configuration parameters, 
  * that are loaded from the ini file
