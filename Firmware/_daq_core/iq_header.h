@@ -18,21 +18,8 @@
 #define SYNC_WORD 0x2bf7b95a
 
 #define IQ_HEADER_LENGTH 1024
-struct iq_frame_struct 
-{
-	struct iq_header_struct* header;
-	uint8_t* payload;
-	int payload_size; // Used when the channel buffer is not equal to the CPI size
-};
 
-struct iq_frame_struct_32 // Complex float 32 compatible
-{
-	struct iq_header_struct* header;
-	float* payload; //TODO: Modifiy this to CF32 type
-	int payload_size; // Used when the channel buffer is not equal to the CPI size
-};
-
-struct iq_header_struct {
+typedef struct iq_header_struct {
 	uint32_t sync_word;            //Updates: RTL-DAQ - Static   
 	uint32_t frame_type;           //Updates: RTL-DAQ - Static
 	char hardware_id [16];         //Updates: RTL-DAQ - Static
@@ -57,6 +44,24 @@ struct iq_header_struct {
 	uint32_t noise_source_state;   //Updates: RTL-DAQ	
 	uint32_t reserved[192];        //Updates: RTL-DAQ - Static
 	uint32_t header_version;       //Updates: RTL-DAQ - Static   
-};
-void dump_iq_header(struct iq_header_struct* iq_header);
-int check_sync_word(struct iq_header_struct* iq_header);
+} iq_header_struct;
+
+
+typedef struct iq_frame_struct 
+{
+	iq_header_struct* header;
+	uint8_t* payload;
+	int payload_size; // Used when the channel buffer is not equal to the CPI size
+} iq_frame_struct;
+
+
+typedef struct iq_frame_struct_32 // Complex float 32 compatible
+{
+	iq_header_struct* header;
+	float* payload; //TODO: Modifiy this to CF32 type
+	int payload_size; // Used when the channel buffer is not equal to the CPI size
+} iq_frame_struct_32;
+
+
+void dump_iq_header(iq_header_struct* iq_header);
+int check_sync_word(iq_header_struct* iq_header);
