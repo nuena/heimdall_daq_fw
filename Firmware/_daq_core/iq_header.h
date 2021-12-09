@@ -4,7 +4,7 @@
  *	Project: HeIMDALL DAQ Firmware
  *	Author: Tamás Pető
  */
-
+#pragma once
 #define __STDC_FORMAT_MACROS
 #include <stdio.h>
 #include <inttypes.h>
