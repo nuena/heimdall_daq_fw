@@ -136,13 +136,13 @@ int main(int argc, char **argv)
     log_info("CPI size: %d", config.cpi_size);
     log_info("Calibration sample size : %d", config.cal_size);
     
-    netconf_t netconf;
-    if( !open_socket(&netconf, config.udp_addr, config.udp_port, "fir_decimate"))
-    {
-        log_warn("Something seems to have gone wrong when opening UDP port");
-    } else {
-        log_info("Connected to socket");
-    }
+    //netconf_t netconf;
+    //if( !open_socket(&netconf, config.udp_addr, config.udp_port, "fir_decimate"))
+    //{
+    //    log_warn("Something seems to have gone wrong when opening UDP port");
+    //} else {
+    //    log_info("Connected to socket");
+    //}
                 
     /*
     *-------------------------------------
@@ -377,7 +377,7 @@ int main(int argc, char **argv)
                 send_ctr_buff_ready(output_sm_buff, active_buff_ind);                
 
 
-                send_data(&netconf, begin_of_data_buffer, iq_header->cpi_length, sizeof(float) * 2);
+                //send_data(&netconf, begin_of_data_buffer, iq_header->cpi_length, sizeof(float) * 2);
                 break;
         	case 3:
             	/* Frame drop*/

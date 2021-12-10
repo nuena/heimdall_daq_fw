@@ -57,8 +57,7 @@ typedef struct
     int num_ch;
     int daq_buffer_size;
     int log_level;
-    const char * udp_addr;
-    uint16_t udp_port;
+    settings_t save_settings; 
 } configuration;
 
 /*
@@ -83,13 +82,21 @@ static int handler(void* conf_struct, const char* section, const char* name,
     {
         pconfig->log_level = atoi(value);
     }
+    else if (MATCH("sync", "save_mode"))
+    {
+        pconfig->save_settings.opmode = atoi(value);
+    }
     else if (MATCH("sync", "udp_addr"))
     {
-        pconfig->udp_addr = strdup(value);
+        pconfig->save_settings.udp_addr = strdup(value);
     }
-    else if (MATCH("sync", "udp_port"))
+    else if (MATCH("sync", "udp_port")) 
     {
-        pconfig->udp_port = atoi(value);
+        pconfig->save_settings.port = atoi(value);
+    }
+    else if (MATCH("sync", "sqlite_filename")) 
+    {
+        pconfig->save_settings.db_filename = strdup(value); 
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -190,9 +197,8 @@ int main(int argc, char* argv[])
     log_info("Channel number: %d", ch_no);
     log_info("Number of IQ samples per channel: %d", sample_size);
 
-    netconf_t netconf;
-    open_socket(&netconf, config.udp_addr, config.udp_port, "");
-    
+    init_data_output(&config.save_settings, "");
+
     delays = (int*) malloc(ch_no*sizeof(int));    
     int read_size; // Stores the read bytes from stdin
     int first_read = 0;
@@ -312,7 +318,7 @@ int main(int argc, char* argv[])
                     fwrite(read_pointer , sizeof(uint8_t), sample_size*2, stdout);
                     fflush(stdout);
 
-                    send_data(&netconf, read_pointer, sample_size, 2*sizeof(uint8_t));
+                    //send_data(&netconf, read_pointer, sample_size, 2*sizeof(uint8_t));
                 }
                 else // Write index must be 0
                 {
@@ -320,14 +326,14 @@ int main(int argc, char* argv[])
                     // Write first chunk
                     read_pointer = sync_buffers[m].circ_buffer + (delay+sample_size*2);
                     fwrite(read_pointer , sizeof(uint8_t), (sample_size*2-delay), stdout);
-                    send_data(&netconf, read_pointer, sample_size * 2 - delay, sizeof(uint8_t));
+                    //send_data(&netconf, read_pointer, sample_size * 2 - delay, sizeof(uint8_t));
 
                     //Write second chunk
                     read_pointer = sync_buffers[m].circ_buffer;
                     fwrite(read_pointer , sizeof(uint8_t), delay, stdout);
                     fflush(stdout);
 
-                    send_data(&netconf, read_pointer, delay, sizeof(uint8_t));
+                    //send_data(&netconf, read_pointer, delay, sizeof(uint8_t));
                 }                   
                 log_debug("Channel: %d, Delay: %d [%ld]",m,delay,iq_header->daq_block_index);            
             } // End of multichannel data block read-write

@@ -195,8 +195,8 @@ int main(int argc, char* argv[])
     succ = init_out_sm_buffer(output_sm_buff);
     if(succ !=0){FATAL_ERR("Shared memory initialization failed. Exiting.")}
 
-    netconf_t netconf;
-    open_socket(&netconf, config.udp_addr, config.udp_port, "");
+//    netconf_t netconf;
+//    open_socket(&netconf, config.udp_addr, config.udp_port, "");
 	
     /*
      *
@@ -345,7 +345,7 @@ int main(int argc, char* argv[])
                             struct circ_buffer_struct *cbuff_m = &circ_buff_structs[m];
                             offset = IQ_HEADER_LENGTH/(sizeof(uint8_t)) + m*active_out_buffer_size*2;
                             memcpy(frame_ptr+offset, cbuff_m->iq_circ_buffer+wr_offset, active_out_buffer_size*2);
-send_data(&netconf, cbuff_m->iq_circ_buffer + wr_offset, out_buffer_size, 2*sizeof(uint8_t) );
+                            //send_data(&netconf, cbuff_m->iq_circ_buffer + wr_offset, out_buffer_size, 2*sizeof(uint8_t) );
                         }
                         wr_offset += active_out_buffer_size*2;
                         wr_offset = wr_offset % (buffer_num * in_buffer_size*2);                    
@@ -361,8 +361,8 @@ send_data(&netconf, cbuff_m->iq_circ_buffer + wr_offset, out_buffer_size, 2*size
                             memcpy(frame_ptr+offset, cbuff_m->iq_circ_buffer+wr_offset, chunk_size);
                             memcpy(frame_ptr+offset+chunk_size, cbuff_m->iq_circ_buffer, chunk_size_2);
 
-                            send_data(&netconf, cbuff_m->iq_circ_buffer+wr_offset, chunk_size, sizeof(uint8_t));
-                            send_data(&netconf, cbuff_m->iq_circ_buffer, chunk_size_2, sizeof(uint8_t));
+                        //    send_data(&netconf, cbuff_m->iq_circ_buffer+wr_offset, chunk_size, sizeof(uint8_t));
+                        //    send_data(&netconf, cbuff_m->iq_circ_buffer, chunk_size_2, sizeof(uint8_t));
 
                         }
                         wr_offset = chunk_size_2;

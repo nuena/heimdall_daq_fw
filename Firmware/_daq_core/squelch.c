@@ -240,6 +240,7 @@ int check_trigger(struct iq_frame_struct_32* iq_frame, configuration * pconfig)
     static float sq_th = 0.05f; // only initially, will be updated by auto squelch!
     // Recalculate power levels if necessary:
     if(pconfig->squelch_auto)  // only if enabled
+    {
         if((get_time_double() - last_check) > CHECK_INTERVAL_MS / 1000 // and enough time has passed
             && (triggered_samples_count + nontriggered_samples_count) > 25 // and enough packets were processed
             )
@@ -281,6 +282,7 @@ int check_trigger(struct iq_frame_struct_32* iq_frame, configuration * pconfig)
 
             }
         }
+    }
     else  // if no automatic squelch is enabled, get value from manually set max_th
     {
         sq_th = max_th;
@@ -463,8 +465,8 @@ int main(int argc, char* argv[])
     log_info("Channel number: %d", ch_num);
     log_info("Squelch threshold: %f ", squelch_threshold);
 
-    netconf_t netconf;
-    open_socket(&netconf, config.udp_addr, config.udp_port, "");
+    //netconf_t netconf;
+    //open_socket(&netconf, config.udp_addr, config.udp_port, "");
     /* Prepare input and output IQ frames */
     struct iq_frame_struct_32 * iq_frame_out = calloc(1, sizeof(struct iq_frame_struct_32));
     struct iq_frame_struct_32 * iq_frame_in  = calloc(1, sizeof(struct iq_frame_struct_32));
@@ -627,7 +629,7 @@ int main(int argc, char* argv[])
                 log_trace("<--Transfering frame type: %d, daq ind:[%d]",iq_frame_out->header->frame_type, iq_frame_out->header->daq_block_index);
                 cpi_tracker = iq_frame_out->header->cpi_index;
                 send_ctr_buff_ready(output_sm_buff, active_buff_ind_out);
-                send_data(&netconf, iq_frame_out->payload, iq_frame_out->header->cpi_length, 2 * sizeof(float));
+                //send_data(&netconf, iq_frame_out->payload, iq_frame_out->header->cpi_length, 2 * sizeof(float));
             }
                 
         }

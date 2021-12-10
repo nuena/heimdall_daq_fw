@@ -133,8 +133,8 @@ int main(int argc, char* argv[])
     //log_info("Overriding log level to LOG_TRACE!");
     struct iq_frame_struct_32* iq_frame =calloc(1, sizeof(struct iq_frame_struct_32));
 
-    netconf_t netconf;
-    open_socket(&netconf, config.udp_addr, config.udp_port, "");
+    //netconf_t netconf;
+    //open_socket(&netconf, config.udp_addr, config.udp_port, "");
 
     /* Initializing input shared memory interface */
     struct shmem_transfer_struct* input_sm_buff = calloc(1, sizeof(struct shmem_transfer_struct));
@@ -175,7 +175,7 @@ int main(int argc, char* argv[])
 
         gettimeofday(&tval_before, NULL);
         ret=send_iq_frame(iq_frame, sockets[1]);
-        send_data(&netconf, iq_frame->payload, iq_frame->header->cpi_length, 2 * sizeof(float));
+        //send_data(&netconf, iq_frame->payload, iq_frame->header->cpi_length, 2 * sizeof(float));
 
         gettimeofday(&tval_after, NULL);
         timersub(&tval_after, &tval_before, &tval_result);
