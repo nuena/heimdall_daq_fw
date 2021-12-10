@@ -18,3 +18,5 @@ Firmware/__pycache__/*
 data/*
 legacy/*
 !.keep
+
+*.swp
