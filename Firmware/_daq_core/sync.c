@@ -96,7 +96,7 @@ static int handler(void* conf_struct, const char* section, const char* name,
     }
     else if (MATCH("sync", "sqlite_filename")) 
     {
-        pconfig->save_settings.db_filename = strdup(value); 
+        pconfig->save_settings.filename = strdup(value); 
     }
     else {
         return 0;  /* unknown section/name, error */

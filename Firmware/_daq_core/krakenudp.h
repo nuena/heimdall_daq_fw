@@ -8,7 +8,8 @@ typedef enum
 {
     NOOUTPUT, 
     UDP, 
-    SQLITE
+    SQLITE, 
+    WAV
 } mode; 
 
 typedef enum
@@ -22,7 +23,7 @@ typedef struct
     mode opmode; 
     const char * udp_addr; 
     unsigned short port; 
-    const char * db_filename; 
+    const char * filename; 
 } settings_t; 
     
 

@@ -11,6 +11,9 @@
 
 #include <sqlite3.h>
 
+#include <stdio.h>
+#include <sndfile.h>
+
 #include "log.h"
 
 
@@ -21,21 +24,22 @@
 
 static netconf_t netconf; 
 sqlite3 * db; 
+SNDFILE * wavfile; 
 
 bool open_db(settings_t * settings, const char * debug_info) 
 {
     int retval; 
     char *zErrMsg = 0; 
 
-    retval = sqlite3_open(settings->db_filename, &db); 
+    retval = sqlite3_open(settings->filename, &db); 
     if(retval) {
-        log_error("Cannot open output database %s, message: %s\n", settings->db_filename, sqlite3_errmsg(db)); 
+        log_error("Cannot open output database %s, message: %s\n", settings->filename, sqlite3_errmsg(db)); 
         return false; 
     } 
-    log_info("Successfully opened output database %s\n", settings->db_filename); 
+    log_info("Successfully opened output database %s\n", settings->filename); 
     log_info("Creating database structure\n");
     // TODO: change to adaptive number of channels 
-    const char * sql = "CREATE TABLE data (id INTEGER PRIMARY KEY AUTOINCREMENT, " \
+    const char * sql = "CREATE TABLE IF NOT EXISTS data (id INTEGER PRIMARY KEY AUTOINCREMENT, " \
                         "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, " \
                         "header BLOB," \
                         "ch1 BLOB," \
@@ -45,11 +49,29 @@ bool open_db(settings_t * settings, const char * debug_info)
     retval = sqlite3_exec(db, sql, NULL, NULL, &zErrMsg);
 
     if(retval != SQLITE_OK) {
-        log_error("Could not create SQLite database! Error message: %s. %s\n", zErrMsg, debug_info);
+        log_error("Could not create SQLite table! Error message: %s. %s\n", zErrMsg, debug_info);
         sqlite3_free(zErrMsg); 
         sqlite3_close(db);
         return false;
     } 
+    return true; 
+}
+
+bool open_wav(settings_t * settings, const char * debug_info) 
+{
+    SF_INFO wavFileInfo; 
+
+    wavFileInfo.channels = 2 * NUM_CHANNEL;  // one for I, one for Q
+    wavFileInfo.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT; // TODO change to uint8 for the first steps in the chain
+    wavFileInfo.samplerate = 1024000;
+    
+    wavfile = sf_open(settings->filename, SFM_WRITE, &wavFileInfo); 
+
+    if (wavfile == NULL) {
+        log_error("Could not open WAV file"); 
+        return false; 
+    }
+
     return true; 
 }
 
@@ -103,6 +125,9 @@ bool init_data_output(settings_t * settings, const char * debug_info) {
         case SQLITE: 
             log_info("Opening SQLite database. %s\n", debug_info); 
             return open_db(settings, debug_info); 
+        case WAV:
+            log_info("Opening WAV file. %s\n", debug_info); 
+            return open_wav(settings, debug_info); 
     }
     log_error("Couldn't initialize data output. Operation mode not recognized\n"); 
     return false; 
@@ -138,6 +163,7 @@ void emit_data(
             }
             return; 
         case SQLITE: 
+        {   // curly braces for scoping the variables
             if (n_ch != NUM_CHANNEL) {
                 // TODO allow adjusting the amount of channels. 
                 log_error("You're trying to save %d channels to the database. Currently only %d channels are supported, this "
@@ -166,10 +192,10 @@ void emit_data(
                 memcpy(&ch4[s], &data[4 * s + 3 * elem_size], elem_size); 
             }
 */
-            memcpy(&ch1, &data[0 * n_elem * elem_size], elem_size * n_elem); 
-            memcpy(&ch2, &data[1 * n_elem * elem_size], elem_size * n_elem); 
-            memcpy(&ch3, &data[2 * n_elem * elem_size], elem_size * n_elem); 
-            memcpy(&ch4, &data[3 * n_elem * elem_size], elem_size * n_elem); 
+            memcpy(ch1, &data[0 * n_elem * elem_size], elem_size * n_elem); 
+            memcpy(ch2, &data[1 * n_elem * elem_size], elem_size * n_elem); 
+            memcpy(ch3, &data[2 * n_elem * elem_size], elem_size * n_elem); 
+            memcpy(ch4, &data[3 * n_elem * elem_size], elem_size * n_elem); 
 
             // TODO: finer error handling?
             retval = sqlite3_bind_blob(stmt, 1, header, sizeof(iq_header_struct), SQLITE_STATIC); 
@@ -191,8 +217,52 @@ void emit_data(
             free(ch3); 
             free(ch4); 
 
-            return;  
+            return; 
+        }
 
+        case WAV:
+        {
+            // deinterleave data:
+            // we have 4 channels concatenated: re1/im1 (interleaved) | re2/im2 (interleaved) | ...
+
+            char * deinterleaved  = calloc(n_elem * NUM_CHANNEL, elem_size);
+
+            // elem_size gives the size of one IQ sample (complex). 
+            // the real and imaginary parts are therefore half as big: 
+            const uint8_t elem_size_real = elem_size / 2; 
+            for (int c = 0; c < NUM_CHANNEL; c++) {
+                for (int s = 0; s < n_elem; s++) {
+                    // calculate current offset in bytes: 
+                    int offset_src      = (c * n_elem + s) * elem_size; 
+                    int offset_dst_real = (2 * c * n_elem + s) * elem_size_real; 
+                    int offset_dst_imag = ((2 * c + 1) * n_elem + s) * elem_size_real; 
+                    // copy real and imag:  
+                    memcpy(&deinterleaved[offset_dst_real], &data[offset_src], elem_size_real); 
+                    memcpy(&deinterleaved[offset_dst_imag], &data[offset_src + elem_size_real], elem_size_real); 
+                }
+            } 
+            // we have now 8 "channels" of data - ch1 real | ch1 imag | ch2 real | ch2 imag | ... 
+            // save this to file. 
+            if(elem_size == COMPLEX_INT8)
+            {
+                // convert to float in [-1, 1]-interval: 
+                float * short_data = (float*) calloc(n_elem * NUM_CHANNEL * 2, sizeof(float)); 
+                for (int i = 0; i < n_elem * NUM_CHANNEL * 2; i++) {
+                    short_data[i] =  ((float) deinterleaved[i] - 128.0f) / 128.0f; 
+                }
+
+                sf_writef_float(wavfile, short_data, n_elem); 
+                free(short_data); 
+            } else if (elem_size == COMPLEX_FLOAT) {
+                sf_writef_float(wavfile, (const float*) deinterleaved, n_elem); 
+            }
+
+            // flush buffers: 
+            sf_write_sync(wavfile); 
+            free(deinterleaved);
+
+            return; 
+        }
         default: 
             log_error("Cannot parse operation mode %s. Unable to save data", settings->opmode); 
             return; 

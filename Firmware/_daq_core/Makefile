@@ -1,7 +1,7 @@
 # Makefile for compiling the DAQ firmware
 # Author: Tamás Pető, Sándor Bajusz
 CC=gcc
-CFLAGS=-Wall -std=gnu99 -march=native -O2 -DLOG_USE_COLOR 
+CFLAGS=-Wall -std=gnu99 -march=native -O0 -DLOG_USE_COLOR  -g
 # Optimized C-flags for Pi 4
 #CFLAGS=-Wall -std=gnu99 -mcpu=cortex-a72 -mfloat-abi=hard -mfpu=neon-fp-armv8 -mtune=cortex-a72 -Ofast
 RM= rm -f
@@ -24,27 +24,27 @@ daq_util:
 	$(CC) $(CFLAGS) -c -o krakenudp.o krakenudp.c
 
 rtl_daq: iq_header.c log.c ini.c rtl_daq.c rtl_daq.h
-	$(CC) $(CFLAGS) log.o ini.o iq_header.o krakenudp.o -o rtl_daq.out rtl_daq.c -lpthread -lrtlsdr -lsqlite3
+	$(CC) $(CFLAGS) log.o ini.o iq_header.o krakenudp.o -o rtl_daq.out rtl_daq.c -lpthread -lrtlsdr -lsqlite3 -lsndfile
 
 sync: iq_header.c log.c ini.c sync.c rtl_daq.h
-	$(CC) $(CFLAGS) log.o ini.o iq_header.o krakenudp.o -o sync.out sync.c -lpthread -lsqlite3
+	$(CC) $(CFLAGS) log.o ini.o iq_header.o krakenudp.o -o sync.out sync.c -lpthread -lsqlite3 -lsndfile
 
 rebuffer: sh_mem_util.c iq_header.c log.c ini.c rebuffer.c rtl_daq.h
-	$(CC) $(CFLAGS) sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o rebuffer.out rebuffer.c -lrt -lm -lsqlite3
+	$(CC) $(CFLAGS) sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o rebuffer.out rebuffer.c -lrt -lm -lsqlite3 -lsndfile 
 
 squelch: sh_mem_util.c iq_header.c log.c ini.c squelch.c
-	$(CC) $(CFLAGS) sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o squelch.out squelch.c -lpthread -lrt -lm -lsqlite3
+	$(CC) $(CFLAGS) sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o squelch.out squelch.c -lpthread -lrt -lm -lsqlite3 -lsndfile
 
 decimate_x86: sh_mem_util.c iq_header.c log.c ini.c fir_decimate.c
 	$(CC) $(CFLAGS) -c fir_decimate.c -o fir_decimate.o
-	$(CC) $(CFLAGS) fir_decimate.o sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o decimate.out -lrt -lkfr_capi -lsqlite3
+	$(CC) $(CFLAGS) fir_decimate.o sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o decimate.out -lrt -lkfr_capi -lsqlite3 -lsndfile
 
 decimate_arm_neon: sh_mem_util.c iq_header.c log.c ini.c fir_decimate.c
 	$(CC) $(CFLAGS) -DARM_NEON -c fir_decimate.c -o fir_decimate.o
-	$(CC) $(CFLAGS) fir_decimate.o sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o decimate.out -lrt -L. -lNE10 -lm -lsqlite3
+	$(CC) $(CFLAGS) fir_decimate.o sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o decimate.out -lrt -L. -lNE10 -lm -lsqlite3 -lsndfile
 
 iq_server: sh_mem_util.c iq_header.c log.c ini.c iq_server.c
-	$(CC) $(CFLAGS) sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o iq_server.out iq_server.c -lrt -lsqlite3
+	$(CC) $(CFLAGS) sh_mem_util.o log.o ini.o iq_header.o krakenudp.o -o iq_server.out iq_server.c -lrt -lsqlite3 -lsndfile
 
 clean:
 	$(RM) ini.o log.o iq_header.o sh_mem_util.o fir_decimate.o decimate.o rtl_daq.out sync.out rebuffer.out squelch.out decimate.out main_gate.out iq_server.out 	

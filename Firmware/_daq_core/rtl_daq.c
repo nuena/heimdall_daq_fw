@@ -177,9 +177,9 @@ static int handler(void* conf_struct, const char* section, const char* name,
     {
         pconfig->save_settings.port = atoi(value);
     }
-    else if (MATCH("daq", "sqlite_filename")) 
+    else if (MATCH("daq", "filename")) 
     {
-        pconfig->save_settings.db_filename = strdup(value);
+        pconfig->save_settings.filename = strdup(value);
     }
     else {
         return 0;  /* unknown section/name, error */
@@ -436,395 +436,401 @@ int main( int argc, char** argv )
         log_fatal("Configuration could not be loaded, exiting ..");
         return -1;
     }
-    
+
     /*
-    if(config.opmode == SQLITE) {
-        log_warn("Overriding DB save filename!"); 
-        // get string with current time in ISO 8601:
-        struct timeval tv;
-        struct tm tm;
-        char timestamp[] = "YYYY-MM-dd_HH:mm:ss";
-        gettimeofday(&tv, NULL);
+       if(config.opmode == SQLITE) {
+       log_warn("Overriding DB save filename!"); 
+// get string with current time in ISO 8601:
+struct timeval tv;
+struct tm tm;
+char timestamp[] = "YYYY-MM-dd_HH:mm:ss";
+gettimeofday(&tv, NULL);
 
-        // convert to time to 'struct tm' for use with strftime 
-        localtime_r(&tv.tv_sec, &tm);
+// convert to time to 'struct tm' for use with strftime 
+localtime_r(&tv.tv_sec, &tm);
 
-        // format the time
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d_%H:%M:%S", &tm);
-        char filename[50];
-        sprintf(filename, "data/rtl_data-%s.db", timestamp);
-    }    
-    */
+// format the time
+strftime(timestamp, sizeof(timestamp), "%Y-%m-%d_%H:%M:%S", &tm);
+char filename[50];
+sprintf(filename, "data/rtl_data-%s.db", timestamp);
+}    
+*/
 
-    buffer_size = config.daq_buffer_size*2;
-    ch_no = config.num_ch;
+buffer_size = config.daq_buffer_size*2;
+ch_no = config.num_ch;
 
-    log_set_level(config.log_level);
-    /* -> Parse bias tree config */
-    int en_bias_tee[ch_no];
-    char * en_bias_ch_i_str = strtok(config.en_bias_tee_str, ",");    
-    int i = 0;    
-    while( en_bias_ch_i_str != NULL ) 
+log_set_level(config.log_level);
+/* -> Parse bias tree config */
+int en_bias_tee[ch_no];
+char * en_bias_ch_i_str = strtok(config.en_bias_tee_str, ",");    
+int i = 0;    
+while( en_bias_ch_i_str != NULL ) 
+{
+    en_bias_tee[i] = atoi(en_bias_ch_i_str);      
+    en_bias_ch_i_str = strtok(NULL, ",");
+    i++;      
+}    
+log_info("Config succesfully loaded from %s",INI_FNAME);
+log_info("Channel number: %d", ch_no);
+log_info("Number of IQ samples per channel: %d", buffer_size/2);    
+log_info("Starting multichannel coherent RTL-SDR receiver");
+if (config.en_noise_source_ctr == 1) {
+    log_info("Noise source control: enabled");
+}
+else {
+    log_info("Noise source control: disabled");    
+}
+
+
+/* Get control channel device index */
+char dev_serial[16];
+sprintf(dev_serial, "%d", config.ctr_channel_serial_no);
+int ctr_channel_dev_index = rtlsdr_get_index_by_serial(dev_serial);    
+if(ctr_channel_dev_index==-3)
+{
+    log_warn("Failed to identify control channel index based on its configured serial number:%s",dev_serial);
+    log_warn("Set to default device index: 0");
+    ctr_channel_dev_index=0;
+}
+
+/* Allocation */    
+struct iq_header_struct* iq_header = calloc(1, sizeof(struct iq_header_struct));
+
+new_gains=calloc(ch_no, sizeof(*new_gains));
+
+rtl_receivers = malloc(sizeof(struct rtl_rec_struct)*ch_no);
+
+for(int i=0; i<ch_no; i++)
+{
+    struct rtl_rec_struct *rtl_rec = &rtl_receivers[i];
+    memset(rtl_rec, 0, sizeof(struct rtl_rec_struct));
+
+    // Get device index by serial number
+    sprintf(dev_serial, "%d", 1001+i);
+    int dev_index = rtlsdr_get_index_by_serial(dev_serial);
+    rtl_rec->dev_ind = dev_index;
+    log_info("Device serial:%s, index: %d",dev_serial, dev_index);
+    if(dev_index==-3){log_fatal("The serial numbers of the devices are not yet configured, exiting.."); return(-1);}
+
+    // Set noise control channel        
+    if(dev_index == ctr_channel_dev_index){ctr_channel_index=i;}
+}
+
+init_data_output(&config.save_settings, ""); 
+
+// Initialization
+for(int i=0; i<ch_no; i++)
+{
+    struct rtl_rec_struct *rtl_rec = &rtl_receivers[i];
+    rtl_rec->buff_ind=0;        
+    rtl_rec->gain = config.gain;
+    rtl_rec->center_freq = config.center_freq;
+    rtl_rec->sample_rate = config.sample_rate;
+    rtl_rec->buffer = malloc(NUM_BUFF * buffer_size * sizeof(uint8_t));      
+    if(! rtl_rec->buffer)
     {
-        en_bias_tee[i] = atoi(en_bias_ch_i_str);      
-        en_bias_ch_i_str = strtok(NULL, ",");
-        i++;      
-    }    
-    log_info("Config succesfully loaded from %s",INI_FNAME);
-    log_info("Channel number: %d", ch_no);
-    log_info("Number of IQ samples per channel: %d", buffer_size/2);    
-    log_info("Starting multichannel coherent RTL-SDR receiver");
-    if (config.en_noise_source_ctr == 1)
-        log_info("Noise source control: enabled");
+        log_fatal("Data buffer allocation failed. Exiting..");   
+        return -1;
+    }
+
+}
+/* Fill up the static fields of the IQ header */    
+iq_header->sync_word = SYNC_WORD;
+iq_header->header_version = 7;
+strcpy(iq_header->hardware_id, config.hw_name);
+iq_header->unit_id=config.hw_unit_id;
+iq_header->active_ant_chs=ch_no;
+iq_header->ioo_type=config.ioo_type;
+iq_header->rf_center_freq= (uint64_t) config.center_freq;
+iq_header->adc_sampling_freq = (uint64_t) config.sample_rate; 
+iq_header->sampling_freq=(uint64_t) config.sample_rate; // Overwriten by the decimator module 
+iq_header->cpi_length= (uint32_t) config.daq_buffer_size; // Overwriten by the decimator module 
+iq_header->time_stamp=0; // Unix Epoch time
+iq_header->daq_block_index=0; // DAQ buffer index
+iq_header->cpi_index=0; // Filled up by the decimator module 
+iq_header->ext_integration_cntr=0; // Extended integration counter is not used by RTL-DAQs
+iq_header->frame_type=FRAME_TYPE_DATA; // Normal data frame	
+iq_header->data_type=2; // IQ data
+iq_header->sample_bit_depth=8; // RTL2832U
+iq_header->adc_overdrive_flags=0;
+for(int m=0;m<ch_no;m++)
+{
+    iq_header->if_gains[m]=(uint32_t) config.gain;
+}
+iq_header->delay_sync_flag=0;
+iq_header->iq_sync_flag=0;
+iq_header->sync_state=0;
+iq_header->noise_source_state=0;
+
+pthread_mutex_init(&buff_ind_mutex, NULL);
+pthread_cond_init(&buff_ind_cond, NULL);     
+
+/* Spawn control thread */
+pthread_create(&fifo_read_thread, NULL, fifo_read_tf, NULL);
+
+/* Opening RTL-SDR devices*/
+for(int i=0; i<ch_no; i++)
+{
+    struct rtl_rec_struct *rtl_rec = &rtl_receivers[i]; 
+    rtlsdr_dev_t *dev = NULL;
+    if (rtlsdr_open(&dev, rtl_rec->dev_ind) !=0)
+    {
+        log_fatal("Failed to open RTL-SDR device: %s", strerror(errno));
+        return -1;
+    }
+    rtl_rec->dev = dev;
+}
+/*-> Enable/Disable bias tees*/
+for(int m=0;m<ch_no;m++)
+{
+    if(en_bias_tee[m])
+    {log_info("Bias tee on channel: %d is enabled",m);}
     else
-        log_info("Noise source control: disabled");    
+    {log_info("Bias tee on channel: %d is disabled",m);}
 
+    struct rtl_rec_struct *rtl_rec = &rtl_receivers[ctr_channel_index];                        
+    rtlsdr_set_gpio(rtl_rec->dev, en_bias_tee[m] , m+1);
+}
+pthread_barrier_init(&rtl_init_barrier, NULL, ch_no);
+/* Spawn reader threads */
+for(int i=0; i<ch_no; i++)
+{       
+    pthread_create(&rtl_receivers[i].async_read_thread, NULL, read_thread_entry, &rtl_receivers[i]);
+}
 
-    /* Get control channel device index */
-    char dev_serial[16];
-    sprintf(dev_serial, "%d", config.ctr_channel_serial_no);
-    int ctr_channel_dev_index = rtlsdr_get_index_by_serial(dev_serial);    
-    if(ctr_channel_dev_index==-3)
-    {
-        log_warn("Failed to identify control channel index based on its configured serial number:%s",dev_serial);
-        log_warn("Set to default device index: 0");
-        ctr_channel_dev_index=0;
-    }
-
-    /* Allocation */    
-    struct iq_header_struct* iq_header = calloc(1, sizeof(struct iq_header_struct));
-
-    new_gains=calloc(ch_no, sizeof(*new_gains));
-
-    rtl_receivers = malloc(sizeof(struct rtl_rec_struct)*ch_no);
-
+unsigned long long read_buff_ind = 0;
+int data_ready = 1;
+int rd_buff_ind = 1;
+uint8_t overdrive_flags=0;
+struct rtl_rec_struct *rtl_rec;
+/*
+ *
+ * ---> Main data acquistion loop <---
+ *
+ */
+while( !exit_flag )
+{   
+    /* We are checking here the current buffer indexes of the reader threads.
+     * All the reader threads should reach the same index before we could send out the data,
+     * and we could coninue the acquisition.
+     */        
+    pthread_cond_wait(&buff_ind_cond, &buff_ind_mutex);
+    data_ready = 1;
     for(int i=0; i<ch_no; i++)
     {
-        struct rtl_rec_struct *rtl_rec = &rtl_receivers[i];
-        memset(rtl_rec, 0, sizeof(struct rtl_rec_struct));
-
-        // Get device index by serial number
-        sprintf(dev_serial, "%d", 1001+i);
-        int dev_index = rtlsdr_get_index_by_serial(dev_serial);
-        rtl_rec->dev_ind = dev_index;
-        log_info("Device serial:%s, index: %d",dev_serial, dev_index);
-        if(dev_index==-3){log_fatal("The serial numbers of the devices are not yet configured, exiting.."); return(-1);}
-
-        // Set noise control channel        
-        if(dev_index == ctr_channel_dev_index){ctr_channel_index=i;}
-    }
-
-    init_data_output(&config.save_settings, ""); 
-
-    // Initialization
-    for(int i=0; i<ch_no; i++)
+        rtl_rec = &rtl_receivers[i];
+        if (rtl_rec->buff_ind <= read_buff_ind)
+        {data_ready = 0; break;}      
+    }               
+    if (data_ready == 1)
     {
-        struct rtl_rec_struct *rtl_rec = &rtl_receivers[i];
-        rtl_rec->buff_ind=0;        
-        rtl_rec->gain = config.gain;
-        rtl_rec->center_freq = config.center_freq;
-        rtl_rec->sample_rate = config.sample_rate;
-        rtl_rec->buffer = malloc(NUM_BUFF * buffer_size * sizeof(uint8_t));      
-        if(! rtl_rec->buffer)
-        {
-            log_fatal("Data buffer allocation failed. Exiting..");   
-            return -1;
-        }
-
-    }
-    /* Fill up the static fields of the IQ header */    
-    iq_header->sync_word = SYNC_WORD;
-    iq_header->header_version = 7;
-    strcpy(iq_header->hardware_id, config.hw_name);
-    iq_header->unit_id=config.hw_unit_id;
-    iq_header->active_ant_chs=ch_no;
-    iq_header->ioo_type=config.ioo_type;
-    iq_header->rf_center_freq= (uint64_t) config.center_freq;
-    iq_header->adc_sampling_freq = (uint64_t) config.sample_rate; 
-    iq_header->sampling_freq=(uint64_t) config.sample_rate; // Overwriten by the decimator module 
-    iq_header->cpi_length= (uint32_t) config.daq_buffer_size; // Overwriten by the decimator module 
-    iq_header->time_stamp=0; // Unix Epoch time
-    iq_header->daq_block_index=0; // DAQ buffer index
-    iq_header->cpi_index=0; // Filled up by the decimator module 
-    iq_header->ext_integration_cntr=0; // Extended integration counter is not used by RTL-DAQs
-    iq_header->frame_type=FRAME_TYPE_DATA; // Normal data frame	
-    iq_header->data_type=2; // IQ data
-    iq_header->sample_bit_depth=8; // RTL2832U
-    iq_header->adc_overdrive_flags=0;
-    for(int m=0;m<ch_no;m++)
-    {
-        iq_header->if_gains[m]=(uint32_t) config.gain;
-    }
-    iq_header->delay_sync_flag=0;
-    iq_header->iq_sync_flag=0;
-    iq_header->sync_state=0;
-    iq_header->noise_source_state=0;
-
-    pthread_mutex_init(&buff_ind_mutex, NULL);
-    pthread_cond_init(&buff_ind_cond, NULL);     
-
-    /* Spawn control thread */
-    pthread_create(&fifo_read_thread, NULL, fifo_read_tf, NULL);
-
-    /* Opening RTL-SDR devices*/
-    for(int i=0; i<ch_no; i++)
-    {
-        struct rtl_rec_struct *rtl_rec = &rtl_receivers[i]; 
-        rtlsdr_dev_t *dev = NULL;
-        if (rtlsdr_open(&dev, rtl_rec->dev_ind) !=0)
-        {
-            log_fatal("Failed to open RTL-SDR device: %s", strerror(errno));
-            return -1;
-        }
-        rtl_rec->dev = dev;
-    }
-    /*-> Enable/Disable bias tees*/
-    for(int m=0;m<ch_no;m++)
-    {
-        if(en_bias_tee[m])
-        {log_info("Bias tee on channel: %d is enabled",m);}
-        else
-        {log_info("Bias tee on channel: %d is disabled",m);}
-
-        struct rtl_rec_struct *rtl_rec = &rtl_receivers[ctr_channel_index];                        
-        rtlsdr_set_gpio(rtl_rec->dev, en_bias_tee[m] , m+1);
-    }
-    pthread_barrier_init(&rtl_init_barrier, NULL, ch_no);
-    /* Spawn reader threads */
-    for(int i=0; i<ch_no; i++)
-    {       
-        pthread_create(&rtl_receivers[i].async_read_thread, NULL, read_thread_entry, &rtl_receivers[i]);
-    }
-
-    unsigned long long read_buff_ind = 0;
-    int data_ready = 1;
-    int rd_buff_ind = 1;
-    uint8_t overdrive_flags=0;
-    struct rtl_rec_struct *rtl_rec;
-    /*
-     *
-     * ---> Main data acquistion loop <---
-     *
-     */
-    while( !exit_flag )
-    {   
-        /* We are checking here the current buffer indexes of the reader threads.
-         * All the reader threads should reach the same index before we could send out the data,
-         * and we could coninue the acquisition.
-         */        
-        pthread_cond_wait(&buff_ind_cond, &buff_ind_mutex);
-        data_ready = 1;
+        /*
+         *---------------------
+         *  Complete IQ header 
+         *---------------------
+         */                        
+        // Acquire local time in ms (Unix EPOC) and set timestamp field
+        gettimeofday(&frame_time_stamp, NULL);                    
+        uint64_t time_stamp_ms = (uint64_t)(frame_time_stamp.tv_sec) * 1000 +
+            (uint64_t)(frame_time_stamp.tv_usec) / 1000;
+        log_debug("Timestamp: %llu", time_stamp_ms);
+        iq_header->time_stamp = time_stamp_ms;
+        iq_header->daq_block_index = (uint32_t) read_buff_ind;
         for(int i=0; i<ch_no; i++)
         {
-            rtl_rec = &rtl_receivers[i];
-            if (rtl_rec->buff_ind <= read_buff_ind)
-            {data_ready = 0; break;}      
-        }               
-        if (data_ready == 1)
+            rtl_rec = &rtl_receivers[i];                
+            // Set center frequncy value
+            iq_header->rf_center_freq = (uint64_t) rtl_rec->center_freq;                
+            // Set gain value                
+            iq_header->if_gains[i] = (uint32_t) rtl_rec->gain;                
+            // Check overdrive
+            for(int n=0; n<buffer_size; n++)
+            {
+                if( *(rtl_rec->buffer+buffer_size*rd_buff_ind + n) == 255)
+                    overdrive_flags |= 1<<i;
+            }
+        }             
+        iq_header->adc_overdrive_flags = (uint32_t) overdrive_flags;
+        iq_header->noise_source_state = (uint32_t) noise_source_state;
+        // Set frame type in the header
+        if(en_dummy_frame)
         {
-            /*
-             *---------------------
-             *  Complete IQ header 
-             *---------------------
-             */                        
-            // Acquire local time in ms (Unix EPOC) and set timestamp field
-            gettimeofday(&frame_time_stamp, NULL);                    
-            uint64_t time_stamp_ms = (uint64_t)(frame_time_stamp.tv_sec) * 1000 +
-                (uint64_t)(frame_time_stamp.tv_usec) / 1000;
-            log_debug("Timestamp: %llu", time_stamp_ms);
-            iq_header->time_stamp = time_stamp_ms;
-            iq_header->daq_block_index = (uint32_t) read_buff_ind;
-            for(int i=0; i<ch_no; i++)
-            {
-                rtl_rec = &rtl_receivers[i];                
-                // Set center frequncy value
-                iq_header->rf_center_freq = (uint64_t) rtl_rec->center_freq;                
-                // Set gain value                
-                iq_header->if_gains[i] = (uint32_t) rtl_rec->gain;                
-                // Check overdrive
-                for(int n=0; n<buffer_size; n++)
-                {
-                    if( *(rtl_rec->buffer+buffer_size*rd_buff_ind + n) == 255)
-                        overdrive_flags |= 1<<i;
-                }
-            }             
-            iq_header->adc_overdrive_flags = (uint32_t) overdrive_flags;
-            iq_header->noise_source_state = (uint32_t) noise_source_state;
-            // Set frame type in the header
-            if(en_dummy_frame)
-            {
-                iq_header->frame_type = FRAME_TYPE_DUMMY; // Dummy frame
-                iq_header->data_type  = 0; // Dummy data
-                iq_header->cpi_length = 0;
-            }
-            else
-            {
-                iq_header->cpi_length= (uint32_t) config.daq_buffer_size;
-                iq_header->data_type=1;
-                if (noise_source_state ==1) // Calibration frame
-                {
-                    iq_header->frame_type=FRAME_TYPE_CAL;                    
-                }
-                else // Normal data frame
-                {
-                    iq_header->frame_type=FRAME_TYPE_DATA;                    
-                }
-            }
-            /* Sending IQ header */
-            fwrite(iq_header, sizeof(struct iq_header_struct), 1, stdout);   
-
-            /*
-             *-------------------
-             *  Complete IQ data
-             *-------------------
-             */
-
-            /* Sending out the so far acquired data */            
-            if(en_dummy_frame == 0) // DATA or CAL frame
-            {            
-                for(int i=0; i<ch_no; i++)
-                {                
-                    rtl_rec = &rtl_receivers[i];
-                    rd_buff_ind = read_buff_ind % NUM_BUFF;                                              
-                    fwrite(rtl_rec->buffer + buffer_size * rd_buff_ind, 1, buffer_size, stdout);                
-                    /*
-                    if(config.udp_channel_index < 0 || config.udp_channel_index == i) {
-                        send_data(&netconf, rtl_rec->buffer + buffer_size * rd_buff_ind, buffer_size, sizeof(uint8_t));
-                    }
-                    if(config.opmode == SAVE) {
-                        fwrite(rtl_rec->buffer, sizeof(uint8_t), buffer_size, outfile);
-                    }*/
-                }
-
-                // header and frame are assembled - send out or save: 
-                emit_data(&config.save_settings, rtl_rec->buffer, buffer_size, 4, COMPLEX_INT8, iq_header);  
-            }
-            if(overdrive_flags !=0)
-                log_warn("Overdrive detected, flags: 0x%02X", overdrive_flags);
-
-            fflush(stdout);
-            
-            overdrive_flags=0;
-            read_buff_ind ++;
-            if (en_dummy_frame)
-            {
-                dummy_frame_cntr +=1;
-                if (dummy_frame_cntr == NO_DUMMY_FRAMES)
-                    en_dummy_frame = 0;
-            }
-            log_debug("IQ frame writen, block index: %d, type:%d",iq_header->daq_block_index, iq_header->frame_type);
-            /*
-             *-------------------
-             *   Tuner control
-             *-------------------
-             */
-
-            /* We need to reconfigure the tuner, so the async read must be stopped*/
-            // This feature is deprecated !!!
-            if(reconfig_trigger==1)
-            {
-                for(int i=0; i<ch_no; i++)
-                {                
-                    if(rtlsdr_cancel_async(rtl_receivers[i].dev) != 0)
-                    {
-                        log_error("Async read stop failed: %s", strerror(errno));
-                    }                    
-                }
-                reconfig_trigger=0;
-            }
-            /* Center frequency tuning request*/
-            if(center_freq_change_flag == 1)
-            {
-                for( int i=0; i<ch_no; i++)
-                {
-                    rtl_rec = &rtl_receivers[i];         
-                    if (rtlsdr_set_center_freq(rtl_rec->dev, new_center_freq) !=0)
-                    {
-                        log_error("Failed to set center frequency: %s", strerror(errno));
-                    }                    
-                    else
-                    {
-                        rtl_rec->center_freq = rtlsdr_get_center_freq(rtl_rec->dev);
-                        log_info("Center frequency changed at ch: %d, frequency: %d",i,rtl_rec->center_freq);
-                    }
-                }
-                center_freq_change_flag=0;
-            }
-
-            /* Gain change request */
-            if(gain_change_flag==1)
-            {
-                for( int i=0; i<ch_no; i++)
-                {
-                    rtl_rec = &rtl_receivers[i];
-                    if (rtlsdr_set_tuner_gain(rtl_rec->dev, new_gains[i]) !=0){
-                        log_error("Failed to set gain value: %s", strerror(errno));
-                    }
-                    else{
-                        log_info("Gain change at ch: %d, gain %d",i, new_gains[i]);
-                        rtl_rec->gain = new_gains[i];
-                    }
-                }
-                gain_change_flag=0;
-            }            
-            /* Noise source switch request */
-            if (last_noise_source_state != noise_source_state && config.en_noise_source_ctr==1)
-            {
-                rtl_rec = &rtl_receivers[ctr_channel_index];                
-                if (noise_source_state == 1){
-                    rtlsdr_set_gpio(rtl_rec->dev, 1, 0);
-                    log_info("Noise source turned on ");
-                }
-                else if (noise_source_state == 0){
-                    rtlsdr_set_gpio(rtl_rec->dev, 0, 0);
-                    log_info("Noise source turned off ");
-                }
-                /*
-                   Currently the bias tee (noise source) has to be enabled in all Kerberos SDRs
-                   if there are multiple in the system. This hardware issue will be resolved in later versions.
-                   If you are using "older" (version < 2.0) Kerberos SDRs, uncomment this section to properly 
-                   control the noise source.
-                   */
-                /*
-                   if(ch_no>4)
-                   {
-                   log_warn("Noise source is controlled on the second Kerberos SDR as well");
-                   struct rtl_rec_struct* rtl_rec_aux=&rtl_receivers[7];
-                   if(noise_source_state == 1)
-                   rtlsdr_set_gpio(rtl_rec_aux->dev, 1, 0);
-                   else if(noise_source_state == 0)
-                   rtlsdr_set_gpio(rtl_rec_aux->dev, 0, 0);
-                   }
-                   */
-            }
-            last_noise_source_state = noise_source_state;
+            iq_header->frame_type = FRAME_TYPE_DUMMY; // Dummy frame
+            iq_header->data_type  = 0; // Dummy data
+            iq_header->cpi_length = 0;
         }
-    } 
-    log_info("Exiting..");  
-    for(int i=0; i<ch_no; i++)
-    {     
-        struct rtl_rec_struct *rtl_rec = &rtl_receivers[i];
-        if(rtlsdr_cancel_async(rtl_rec->dev) != 0)
+        else
         {
-            log_fatal("Async read stop failed: %s", strerror(errno));
-            return -1;
-        }        
-        pthread_join(rtl_rec->async_read_thread, NULL);
-        free(rtl_rec->buffer);
+            iq_header->cpi_length= (uint32_t) config.daq_buffer_size;
+            iq_header->data_type=1;
+            if (noise_source_state ==1) // Calibration frame
+            {
+                iq_header->frame_type=FRAME_TYPE_CAL;                    
+            }
+            else // Normal data frame
+            {
+                iq_header->frame_type=FRAME_TYPE_DATA;                    
+            }
+        }
+        /* Sending IQ header */
+        fwrite(iq_header, sizeof(struct iq_header_struct), 1, stdout);   
 
-        /* This does not work currently, TODO: Close the devices properly
-           if(rtlsdr_close(rtl_rec->dev) != 0)
-           {
-           fprintf(stderr, "[ ERROR ]  Device close failed: %s\n", strerror(errno));
-           exit(1);
-           }
-           fprintf(stderr, "[ INFO ] Device closed with id:%d\n",i);
-           */
+        /*
+         *-------------------
+         *  Complete IQ data
+         *-------------------
+         */
+
+        /* Sending out the so far acquired data */            
+        if(en_dummy_frame == 0) // DATA or CAL frame
+        {   
+            // we need to save the data temporarily to be able to emit it, unfortunately.         
+            char * buf = malloc(ch_no * buffer_size * sizeof(char));   // buffer_size is given in byte, not samples.
+            for(int i=0; i<ch_no; i++)
+            {                
+                rtl_rec = &rtl_receivers[i];
+                rd_buff_ind = read_buff_ind % NUM_BUFF;                                              
+                fwrite(rtl_rec->buffer + buffer_size * rd_buff_ind, 1, buffer_size, stdout);                
+                memcpy(buf + i * buffer_size, rtl_rec->buffer + buffer_size * rd_buff_ind, buffer_size); 
+                /*
+                   if(config.udp_channel_index < 0 || config.udp_channel_index == i) {
+                   send_data(&netconf, rtl_rec->buffer + buffer_size * rd_buff_ind, buffer_size, sizeof(uint8_t));
+                   }
+                   if(config.opmode == SAVE) {
+                   fwrite(rtl_rec->buffer, sizeof(uint8_t), buffer_size, outfile);
+                   }*/
+            }
+
+            // header and frame are assembled - send out or save: 
+            emit_data(&config.save_settings, buf, config.daq_buffer_size, 4, COMPLEX_INT8, iq_header);  
+            free(buf); 
+        }
+        if(overdrive_flags !=0)
+            log_warn("Overdrive detected, flags: 0x%02X", overdrive_flags);
+
+        fflush(stdout);
+
+        overdrive_flags=0;
+        read_buff_ind ++;
+        if (en_dummy_frame)
+        {
+            dummy_frame_cntr +=1;
+            if (dummy_frame_cntr == NO_DUMMY_FRAMES)
+                en_dummy_frame = 0;
+        }
+        log_debug("IQ frame writen, block index: %d, type:%d",iq_header->daq_block_index, iq_header->frame_type);
+        /*
+         *-------------------
+         *   Tuner control
+         *-------------------
+         */
+
+        /* We need to reconfigure the tuner, so the async read must be stopped*/
+        // This feature is deprecated !!!
+        if(reconfig_trigger==1)
+        {
+            for(int i=0; i<ch_no; i++)
+            {                
+                if(rtlsdr_cancel_async(rtl_receivers[i].dev) != 0)
+                {
+                    log_error("Async read stop failed: %s", strerror(errno));
+                }                    
+            }
+            reconfig_trigger=0;
+        }
+        /* Center frequency tuning request*/
+        if(center_freq_change_flag == 1)
+        {
+            for( int i=0; i<ch_no; i++)
+            {
+                rtl_rec = &rtl_receivers[i];         
+                if (rtlsdr_set_center_freq(rtl_rec->dev, new_center_freq) !=0)
+                {
+                    log_error("Failed to set center frequency: %s", strerror(errno));
+                }                    
+                else
+                {
+                    rtl_rec->center_freq = rtlsdr_get_center_freq(rtl_rec->dev);
+                    log_info("Center frequency changed at ch: %d, frequency: %d",i,rtl_rec->center_freq);
+                }
+            }
+            center_freq_change_flag=0;
+        }
+
+        /* Gain change request */
+        if(gain_change_flag==1)
+        {
+            for( int i=0; i<ch_no; i++)
+            {
+                rtl_rec = &rtl_receivers[i];
+                if (rtlsdr_set_tuner_gain(rtl_rec->dev, new_gains[i]) !=0){
+                    log_error("Failed to set gain value: %s", strerror(errno));
+                }
+                else{
+                    log_info("Gain change at ch: %d, gain %d",i, new_gains[i]);
+                    rtl_rec->gain = new_gains[i];
+                }
+            }
+            gain_change_flag=0;
+        }            
+        /* Noise source switch request */
+        if (last_noise_source_state != noise_source_state && config.en_noise_source_ctr==1)
+        {
+            rtl_rec = &rtl_receivers[ctr_channel_index];                
+            if (noise_source_state == 1){
+                rtlsdr_set_gpio(rtl_rec->dev, 1, 0);
+                log_info("Noise source turned on ");
+            }
+            else if (noise_source_state == 0){
+                rtlsdr_set_gpio(rtl_rec->dev, 0, 0);
+                log_info("Noise source turned off ");
+            }
+            /*
+               Currently the bias tee (noise source) has to be enabled in all Kerberos SDRs
+               if there are multiple in the system. This hardware issue will be resolved in later versions.
+               If you are using "older" (version < 2.0) Kerberos SDRs, uncomment this section to properly 
+               control the noise source.
+               */
+            /*
+               if(ch_no>4)
+               {
+               log_warn("Noise source is controlled on the second Kerberos SDR as well");
+               struct rtl_rec_struct* rtl_rec_aux=&rtl_receivers[7];
+               if(noise_source_state == 1)
+               rtlsdr_set_gpio(rtl_rec_aux->dev, 1, 0);
+               else if(noise_source_state == 0)
+               rtlsdr_set_gpio(rtl_rec_aux->dev, 0, 0);
+               }
+               */
+        }
+        last_noise_source_state = noise_source_state;
     }
-    pthread_mutex_unlock(&buff_ind_mutex);
-    pthread_join(fifo_read_thread, NULL);
-    log_info("All the resources are free now");
-    free(rtl_receivers);
-    return 0;
+} 
+log_info("Exiting..");  
+for(int i=0; i<ch_no; i++)
+{     
+    struct rtl_rec_struct *rtl_rec = &rtl_receivers[i];
+    if(rtlsdr_cancel_async(rtl_rec->dev) != 0)
+    {
+        log_fatal("Async read stop failed: %s", strerror(errno));
+        return -1;
+    }        
+    pthread_join(rtl_rec->async_read_thread, NULL);
+    free(rtl_rec->buffer);
+
+    /* This does not work currently, TODO: Close the devices properly
+       if(rtlsdr_close(rtl_rec->dev) != 0)
+       {
+       fprintf(stderr, "[ ERROR ]  Device close failed: %s\n", strerror(errno));
+       exit(1);
+       }
+       fprintf(stderr, "[ INFO ] Device closed with id:%d\n",i);
+       */
+}
+pthread_mutex_unlock(&buff_ind_mutex);
+pthread_join(fifo_read_thread, NULL);
+log_info("All the resources are free now");
+free(rtl_receivers);
+return 0;
 }
 
