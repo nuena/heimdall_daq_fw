@@ -125,7 +125,7 @@ void log_log(int level, const char *file, int line, const char *fmt, ...) {
         sprintf(timestr, "%.8s.%.6s", hhmmss, ms);  // precision is used here!
 #ifdef LOG_USE_COLOR
         fprintf(
-                L.fp, "%s %s%-5s\x1b[0m \x1b[90m%s:%d:\x1b[0m ",
+                L.fp, "%s %s%-5s\x1b[0m %s:%d:\x1b[0m ",
                 timestr, level_colors[level], level_names[level], file, line);
 #else
         fprintf(L.fp, "%s %-5s %s:%d: ", timestr, level_names[level], file, line);
