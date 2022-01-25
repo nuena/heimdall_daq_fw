@@ -22,22 +22,18 @@
 #define UDP_MAXLEN 1024 
 #define NUM_CHANNEL 4
 
-static netconf_t netconf; 
-sqlite3 * db; 
-SNDFILE * wavfile; 
-
 bool open_db(settings_t * settings, const char * debug_info) 
 {
     int retval; 
     char *zErrMsg = 0; 
 
-    retval = sqlite3_open(settings->filename, &db); 
+    retval = sqlite3_open(settings->filename, &settings->out.sqlite); 
     if(retval) {
-        log_error("Cannot open output database %s, message: %s\n", settings->filename, sqlite3_errmsg(db)); 
+        log_error("Cannot open output database %s, message: %s", settings->filename, sqlite3_errmsg(settings->out.sqlite)); 
         return false; 
     } 
-    log_info("Successfully opened output database %s\n", settings->filename); 
-    log_info("Creating database structure\n");
+    log_info("Successfully opened output database %s", settings->filename); 
+    log_info("Creating database structure");
     // TODO: change to adaptive number of channels 
     const char * sql = "CREATE TABLE IF NOT EXISTS data (id INTEGER PRIMARY KEY AUTOINCREMENT, " \
                         "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, " \
@@ -46,12 +42,12 @@ bool open_db(settings_t * settings, const char * debug_info)
                         "ch2 BLOB," \
                         "ch3 BLOB," \
                         "ch4 BLOB)";
-    retval = sqlite3_exec(db, sql, NULL, NULL, &zErrMsg);
+    retval = sqlite3_exec(settings->out.sqlite, sql, NULL, NULL, &zErrMsg);
 
     if(retval != SQLITE_OK) {
-        log_error("Could not create SQLite table! Error message: %s. %s\n", zErrMsg, debug_info);
+        log_error("Could not create SQLite table! Error message: %s. %s", zErrMsg, debug_info);
         sqlite3_free(zErrMsg); 
-        sqlite3_close(db);
+        sqlite3_close(settings->out.sqlite);
         return false;
     } 
     return true; 
@@ -64,10 +60,10 @@ bool open_wav(settings_t * settings, const char * debug_info)
     wavFileInfo.channels = 2 * NUM_CHANNEL;  // one for I, one for Q
     wavFileInfo.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT; // TODO change to uint8 for the first steps in the chain
     wavFileInfo.samplerate = 1024000;
-    
-    wavfile = sf_open(settings->filename, SFM_WRITE, &wavFileInfo); 
 
-    if (wavfile == NULL) {
+    settings->out.wavfile = sf_open(settings->filename, SFM_WRITE, &wavFileInfo); 
+
+    if (settings->out.wavfile == NULL) {
         log_error("Could not open WAV file"); 
         return false; 
     }
@@ -82,33 +78,33 @@ bool open_socket(settings_t * settings, const char * debug_info)
     const char * udp_addr = settings->udp_addr; 
     unsigned short port = settings->port;  
     log_info("Trying to connect to %s:%d", udp_addr, port);
-    if ((netconf.sockfd = socket(AF_INET, SOCK_DGRAM, 0)) <= 0) {
+    if ((settings->out.udp_data.sockfd = socket(AF_INET, SOCK_DGRAM, 0)) <= 0) {
         log_error("Could not create UDP output socket, %s", debug_info);
-        netconf.isConnected = false;
+        settings->out.udp_data.isConnected = false;
 
         return false;
     } else {
         log_info("Successfully initialized socket");
     }
-    memset(&netconf.addr, 0, sizeof(netconf.addr));
+    memset(&settings->out.udp_data.addr, 0, sizeof(settings->out.udp_data.addr));
     // Filling server information
 
-    netconf.addr.sin_family = AF_INET;
-    netconf.addr.sin_port = htons(port);
-    netconf.addr.sin_addr.s_addr = inet_addr(udp_addr);
+    settings->out.udp_data.addr.sin_family = AF_INET;
+    settings->out.udp_data.addr.sin_port = htons(port);
+    settings->out.udp_data.addr.sin_addr.s_addr = inet_addr(udp_addr);
 
-    if (netconf.sockfd <= 0) {
+    if (settings->out.udp_data.sockfd <= 0) {
         log_warn("Cannot send data because socket is closed, %s", debug_info);
-        netconf.isConnected = false;
+        settings->out.udp_data.isConnected = false;
         return false;
-    } else if (netconf.addr.sin_addr.s_addr <= 0) {
+    } else if (settings->out.udp_data.addr.sin_addr.s_addr <= 0) {
         log_warn("Cannot send data because IP address %s is invalid, %s", udp_addr, debug_info);
-        netconf.isConnected = false;
+        settings->out.udp_data.isConnected = false;
         return false;
     }
     else {
         log_info("Sending UDP packets to %s, port %d, debug_info: %s", udp_addr, port, debug_info);
-        netconf.isConnected = true;
+        settings->out.udp_data.isConnected = true;
     }
     return true;
 }
@@ -117,44 +113,44 @@ bool init_data_output(settings_t * settings, const char * debug_info) {
     log_info("Initializiing output interface %s", debug_info); 
     switch (settings->opmode) {
         case NOOUTPUT: 
-            log_info("Output is disabled. Nothing to do. %s\n", debug_info); 
+            log_info("Output is disabled. Nothing to do. %s", debug_info); 
             return true; 
         case UDP: 
-            log_info("Opening UDP connection. %s\n", debug_info); 
+            log_info("Opening UDP connection. %s", debug_info); 
             return open_socket(settings, debug_info); 
         case SQLITE: 
-            log_info("Opening SQLite database. %s\n", debug_info); 
+            log_info("Opening SQLite database. %s", debug_info); 
             return open_db(settings, debug_info); 
         case WAV:
-            log_info("Opening WAV file. %s\n", debug_info); 
+            log_info("Opening WAV file. %s", debug_info); 
             return open_wav(settings, debug_info); 
     }
-    log_error("Couldn't initialize data output. Operation mode not recognized\n"); 
+    log_error("Couldn't initialize data output. Operation mode not recognized"); 
     return false; 
 }
 
 
 void emit_data(
         const settings_t * settings, 
-        const char * data, 
+        const void * data, 
         const unsigned int n_elem, 
         const unsigned int n_ch, 
-        complex_t elem_size, 
         const iq_header_struct * header) {
-    //  TODO: move n_ch and elem_size to init_data_output?
+    //  TODO: move n_ch and settings->data_type to init_data_output?
+    log_trace("Emitting data, data_p %p, n_elem: %d, n_ch %d", data, n_elem, n_ch);
     switch (settings->opmode) {
         case NOOUTPUT: 
             // nothing to do
             return; 
         case UDP: 
-            if (netconf.isConnected) {
-                int remaining_bytes = n_elem * n_ch * elem_size;
+            if (settings->out.udp_data.isConnected) {
+                int remaining_bytes = n_elem * n_ch * settings->data_type;
                 log_trace("Sending %d bytes via UDP from %p", remaining_bytes);
                 while (remaining_bytes > 0) { // send the first packets as big as allowed
 
-                    if (0 > sendto(netconf.sockfd, (const char *) data,
+                    if (0 > sendto(settings->out.udp_data.sockfd, (const char *) data,
                                 remaining_bytes > UDP_MAXLEN ? UDP_MAXLEN : remaining_bytes,
-                                0, (const struct sockaddr *) &netconf.addr, sizeof(netconf.addr)))
+                                0, (const struct sockaddr *) &settings->out.udp_data.addr, sizeof(settings->out.udp_data.addr)))
                         log_warn("Sendto encountered error: %s", strerror(errno));
 
                     remaining_bytes -= UDP_MAXLEN;
@@ -163,106 +159,115 @@ void emit_data(
             }
             return; 
         case SQLITE: 
-        {   // curly braces for scoping the variables
-            if (n_ch != NUM_CHANNEL) {
-                // TODO allow adjusting the amount of channels. 
-                log_error("You're trying to save %d channels to the database. Currently only %d channels are supported, this "
-                        "will most likely cause unexpected behaviour!", n_ch, NUM_CHANNEL); 
-            } 
-            const char * sql = "INSERT INTO data (header, ch1, ch2, ch3, ch4) VALUES (?, ?, ?, ?, ?)"; 
-            sqlite3_stmt * stmt = NULL; 
-            int retval; 
-            retval = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL); 
+            {   // curly braces for scoping the variables
+                if (n_ch != NUM_CHANNEL) {
+                    // TODO allow adjusting the amount of channels. 
+                    log_error("You're trying to save %d channels to the database. Currently only %d channels are supported, this "
+                            "will most likely cause unexpected behaviour!", n_ch, NUM_CHANNEL); 
+                } 
+                log_trace("Emmiting data via SQLite to file %s, database struct %p", settings->filename, settings->out.sqlite); 
+                const char * sql = "INSERT INTO data (header, ch1, ch2, ch3, ch4) VALUES (?, ?, ?, ?, ?)"; 
+                sqlite3_stmt * stmt; 
+                int retval; 
+                retval = sqlite3_prepare_v2(settings->out.sqlite, sql, -1, &stmt, NULL); 
 
-            if (retval != SQLITE_OK) {
-                log_error("SQLite error encountered. Error message: %s\n", sqlite3_errmsg(db)); 
+                if (retval != SQLITE_OK) {
+                    log_error("SQLite error encountered. Error message: %s", sqlite3_errmsg(settings->out.sqlite)); 
+                } else
+                {
+                    log_trace("Statement prepared");
+                }
+
+                // data is not interleaved, just concatenated. 
+                retval = sqlite3_bind_blob(stmt, 1, header, sizeof(iq_header_struct), SQLITE_TRANSIENT); 
+                for (int i = 0; i < NUM_CHANNEL; i++) {
+                    // calculate legth in bytes from begin of data array: 
+                    const int len_frame_1ch = n_elem * settings->data_type; 
+                    // typecast data pointer to byte array: 
+                    char * data_byte = (char *) data;
+                    retval = sqlite3_bind_blob(stmt, i+2, &data_byte[i * len_frame_1ch], len_frame_1ch, SQLITE_STATIC);  
+                    if (retval != SQLITE_OK) {
+                        log_error("SQLite error encountered. Error message: %s", sqlite3_errmsg(settings->out.sqlite)); 
+                    } else {
+                        log_trace("Channel data for channel %d bound, retval was %d, data pointer %p, data_length %d", i, retval, &data_byte[i * len_frame_1ch], len_frame_1ch);
+                    }
+                }
+                log_trace("Pre-step");
+                retval = sqlite3_step(stmt);
+                log_trace("post-step"); 
+                if (retval != SQLITE_DONE) {
+                    log_error("SQLite error encountered. Error message: %s", sqlite3_errmsg(settings->out.sqlite)); 
+                } else {
+                    log_trace("statement executed");
+                }
+
+                retval = sqlite3_reset(stmt);
+                
+                if (retval != SQLITE_OK) {
+                    log_error("SQLite error encountered. Error message: %s", sqlite3_errmsg(settings->out.sqlite)); 
+                } else {
+                    log_trace("statement reset");
+                }
+
+                retval = sqlite3_finalize(stmt);
+                if (retval != SQLITE_OK) {
+                    log_error("SQLite error encountered. Error message: %s", sqlite3_errmsg(settings->out.sqlite)); 
+                } else {
+                    log_trace("statement finalized");
+                }
+                sqlite3_exec(settings->out.sqlite, "Commit", NULL, NULL, NULL); 
+                log_trace("Successfully inserted %d byte of data into SQLite DB", NUM_CHANNEL * n_elem * settings->data_type);
+                
+                return; 
             }
-
-            // deinterleave data:
-
-            char * ch1 = calloc(n_elem * elem_size, sizeof(char)); 
-            char * ch2 = calloc(n_elem * elem_size, sizeof(char)); 
-            char * ch3 = calloc(n_elem * elem_size, sizeof(char)); 
-            char * ch4 = calloc(n_elem * elem_size, sizeof(char)); 
-/* as it turns out, the data isn't actually interleaved, it's just concatenated. Stupid me.
-            for(int s = 0; s < n_elem * elem_size; s += elem_size) {
-                memcpy(&ch1[s], &data[4 * s + 0 * elem_size], elem_size); 
-                memcpy(&ch2[s], &data[4 * s + 1 * elem_size], elem_size); 
-                memcpy(&ch3[s], &data[4 * s + 2 * elem_size], elem_size); 
-                memcpy(&ch4[s], &data[4 * s + 3 * elem_size], elem_size); 
-            }
-*/
-            memcpy(ch1, &data[0 * n_elem * elem_size], elem_size * n_elem); 
-            memcpy(ch2, &data[1 * n_elem * elem_size], elem_size * n_elem); 
-            memcpy(ch3, &data[2 * n_elem * elem_size], elem_size * n_elem); 
-            memcpy(ch4, &data[3 * n_elem * elem_size], elem_size * n_elem); 
-
-            // TODO: finer error handling?
-            retval = sqlite3_bind_blob(stmt, 1, header, sizeof(iq_header_struct), SQLITE_STATIC); 
-            retval = sqlite3_bind_blob(stmt, 2, ch1, n_elem * elem_size, SQLITE_STATIC);  
-            retval = sqlite3_bind_blob(stmt, 3, ch2, n_elem * elem_size, SQLITE_STATIC);  
-            retval = sqlite3_bind_blob(stmt, 4, ch3, n_elem * elem_size, SQLITE_STATIC);  
-            retval = sqlite3_bind_blob(stmt, 5, ch4, n_elem * elem_size, SQLITE_STATIC);  
-            if (retval != SQLITE_OK) {
-                log_error("SQLite error encountered. Error message: %s\n", sqlite3_errmsg(db)); 
-            }
-
-            retval = sqlite3_step(stmt);
-            if (retval != SQLITE_DONE) {
-                log_error("SQLite error encountered. Error message: %s\n", sqlite3_errmsg(db)); 
-            }
-            sqlite3_finalize(stmt);
-            free(ch1); 
-            free(ch2); 
-            free(ch3); 
-            free(ch4); 
-
-            return; 
-        }
 
         case WAV:
-        {
-            // deinterleave data:
-            // we have 4 channels concatenated: re1/im1 (interleaved) | re2/im2 (interleaved) | ...
-
-            char * deinterleaved  = calloc(n_elem * NUM_CHANNEL, elem_size);
-
-            // elem_size gives the size of one IQ sample (complex). 
-            // the real and imaginary parts are therefore half as big: 
-            const uint8_t elem_size_real = elem_size / 2; 
-            for (int c = 0; c < NUM_CHANNEL; c++) {
-                for (int s = 0; s < n_elem; s++) {
-                    // calculate current offset in bytes: 
-                    int offset_src      = (c * n_elem + s) * elem_size; 
-                    int offset_dst_real = (2 * c * n_elem + s) * elem_size_real; 
-                    int offset_dst_imag = ((2 * c + 1) * n_elem + s) * elem_size_real; 
-                    // copy real and imag:  
-                    memcpy(&deinterleaved[offset_dst_real], &data[offset_src], elem_size_real); 
-                    memcpy(&deinterleaved[offset_dst_imag], &data[offset_src + elem_size_real], elem_size_real); 
-                }
-            } 
-            // we have now 8 "channels" of data - ch1 real | ch1 imag | ch2 real | ch2 imag | ... 
-            // save this to file. 
-            if(elem_size == COMPLEX_INT8)
             {
-                // convert to float in [-1, 1]-interval: 
-                float * short_data = (float*) calloc(n_elem * NUM_CHANNEL * 2, sizeof(float)); 
-                for (int i = 0; i < n_elem * NUM_CHANNEL * 2; i++) {
-                    short_data[i] =  ((float) deinterleaved[i] - 128.0f) / 128.0f; 
+                // deinterleave real and complex to concatenated channels
+                // we have 4 channels concatenated: re1,im1,re1,im (interleaved) | re2/im2 (interleaved) | ...
+                // and want them re1|im1|re2|im2|...
+
+                char * deinterleaved  = calloc(n_elem * NUM_CHANNEL, settings->data_type);
+                int nbyteswritten; 
+
+                // settings->data_type gives the size of one IQ sample (complex). 
+                // the real and imaginary parts are therefore half as big: 
+                const size_t data_type_real = settings->data_type / 2; 
+                for (int c = 0; c < NUM_CHANNEL; c++) {
+                    for (int s = 0; s < n_elem; s++) {
+                        // calculate current offset in bytes: 
+                        int offset_src      = (c * n_elem + s) * settings->data_type; 
+                        int offset_dst_real = (2 * c * n_elem + s) * data_type_real; 
+                        int offset_dst_imag = ((2 * c + 1) * n_elem + s) * data_type_real; 
+                        // copy real and imag:  
+                        memcpy(&deinterleaved[offset_dst_real], &((const char *)data)[offset_src], data_type_real); 
+                        memcpy(&deinterleaved[offset_dst_imag], &((const char * )data)[offset_src + data_type_real], data_type_real); 
+                    }
+                } 
+                // we have now 8 "channels" of data - ch1 real | ch1 imag | ch2 real | ch2 imag | ... 
+                // save this to file. 
+                if(settings->data_type == COMPLEX_INT8)
+                {
+                    // convert to float in [-1, 1]-interval: 
+                    float * float_data = (float*) calloc(n_elem * NUM_CHANNEL * 2, sizeof(float)); 
+                    for (int i = 0; i < n_elem * NUM_CHANNEL * 2; i++) {
+                        float_data[i] =  ((float) deinterleaved[i] - 128.0f) / 128.0f; 
+                    }
+
+                    nbyteswritten = sf_writef_float(settings->out.wavfile, float_data, n_elem); 
+                    free(float_data); 
+                } else if (settings->data_type == COMPLEX_FLOAT) {
+                    nbyteswritten = sf_writef_float(settings->out.wavfile, (const float*) deinterleaved, n_elem); 
                 }
+                if (nbyteswritten == 0) {
+                    log_error("Could not write to wav file %s. Error Message: %s", settings->filename,  sf_strerror(settings->out.wavfile)); 
+                }
+                // flush buffers: 
+                sf_write_sync(settings->out.wavfile); 
+                free(deinterleaved);
 
-                sf_writef_float(wavfile, short_data, n_elem); 
-                free(short_data); 
-            } else if (elem_size == COMPLEX_FLOAT) {
-                sf_writef_float(wavfile, (const float*) deinterleaved, n_elem); 
+                return; 
             }
-
-            // flush buffers: 
-            sf_write_sync(wavfile); 
-            free(deinterleaved);
-
-            return; 
-        }
         default: 
             log_error("Cannot parse operation mode %s. Unable to save data", settings->opmode); 
             return; 

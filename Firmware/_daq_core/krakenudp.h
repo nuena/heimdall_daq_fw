@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <netinet/in.h>
 #include "iq_header.h"
+#include <sndfile.h>
+#include <sqlite3.h>
 
 typedef enum 
 {
@@ -18,21 +20,29 @@ typedef enum
     COMPLEX_FLOAT = 8
 } complex_t; 
 
-typedef struct 
-{
-    mode opmode; 
-    const char * udp_addr; 
-    unsigned short port; 
-    const char * filename; 
-} settings_t; 
-    
-
 typedef struct
 {
     int sockfd;
     struct sockaddr_in addr;
     bool isConnected;
 } netconf_t;
+
+union output_pointer {
+    netconf_t udp_data; 
+    SNDFILE * wavfile; 
+    sqlite3 * sqlite;
+};
+
+typedef struct 
+{
+    complex_t data_type; 
+    mode opmode; 
+    const char * udp_addr; 
+    unsigned short port; 
+    const char * filename; 
+    union output_pointer out; 
+} settings_t; 
+
 
 /**
  * Try to open and configure an UDP socket for data output.
@@ -54,10 +64,9 @@ typedef struct
  */
 void emit_data(
         const settings_t * settings, 
-        const char * data, 
+        const void * data, 
         const unsigned int n_elem, 
         const unsigned int n_ch, 
-        complex_t elem_size, 
         const iq_header_struct * header);
 
 
