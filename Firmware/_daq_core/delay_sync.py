@@ -117,9 +117,12 @@ class delaySynchronizer():
         self.iq_corrections = np.ones(self.M, dtype=np.complex64) # This vector holds the IQ compensation values
         self.iq_diff_ref = np.ones(self.M, dtype=np.complex64) # Reference IQ difference vector used in the tracking mode
 
-        self.con = sqlite3.connect("../data/data.{}.db".format(datetime.datetime.now().isoformat()))
-        self.cur = self.con.cursor()
-        self.cur.execute(
+
+        self.sqlenabled = False
+        if self.sqlenabled: 
+            self.con = sqlite3.connect("../data/data.{}.db".format(datetime.datetime.now().isoformat()))
+            self.cur = self.con.cursor()
+            self.cur.execute(
                          "CREATE TABLE data (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                          "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, "
                          "header BLOB, "
@@ -417,14 +420,15 @@ class delaySynchronizer():
                                    .format(len(header_uint8), len(iq_samples_out[0, :]), len(iq_samples_out[0, :].tobytes())))
 
                     # save data block to SQLite DB before anything funky happens
-                    self.cur.execute("INSERT INTO data (header, ch1, ch2, ch3, ch4) VALUES (?, ?, ?, ?, ?) ", (
-				         header_uint8,
-                         iq_samples_out[0, :].tobytes(),
-                         iq_samples_out[1, :].tobytes(),
-                         iq_samples_out[2, :].tobytes(),
-                         iq_samples_out[3, :].tobytes()
-                    ))
-                    self.con.commit()
+                    if self.sqlenabled: 
+                        self.cur.execute("INSERT INTO data (header, ch1, ch2, ch3, ch4) VALUES (?, ?, ?, ?, ?) ", (
+       				         header_uint8,
+                             iq_samples_out[0, :].tobytes(),
+                             iq_samples_out[1, :].tobytes(),
+                             iq_samples_out[2, :].tobytes(),
+                             iq_samples_out[3, :].tobytes()
+                        ))
+                        self.con.commit()
 
                     # Truncate IQ sample matrix for further processing
                     if self.iq_header.frame_type == IQHeader.FRAME_TYPE_CAL:
