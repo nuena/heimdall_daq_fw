@@ -94,7 +94,7 @@ static int handler(void* conf_struct, const char* section, const char* name,
     {
         pconfig->save_settings.port = atoi(value);
     }
-    else if (MATCH("sync", "sqlite_filename")) 
+    else if (MATCH("sync", "filename")) 
     {
         pconfig->save_settings.filename = strdup(value); 
     }
@@ -197,6 +197,8 @@ int main(int argc, char* argv[])
     log_info("Channel number: %d", ch_no);
     log_info("Number of IQ samples per channel: %d", sample_size);
 
+    // set data type for this program:
+    config.save_settings.data_type = COMPLEX_INT8;
     init_data_output(&config.save_settings, "");
 
     delays = (int*) malloc(ch_no*sizeof(int));    
@@ -220,6 +222,8 @@ int main(int argc, char* argv[])
         sync_buffers[m].circ_buffer = malloc(BUFFER_NO*sample_size*2*sizeof(uint8_t)); // *2-> I and Q    
         sync_buffers[m].delay = sample_size;  
     }
+
+    log_info("Preparations done. Starting main loop");
     /*
      *
      * ---> Main processing loop <---
@@ -227,7 +231,9 @@ int main(int argc, char* argv[])
      */
     while(!exit_flag)
     {        
+        log_trace("(Re)-starting main loop"); 
         CHK_DATA_PIPE(stdin);
+        log_trace("Stdin Data Pipe checked - pipe open");
         /*
          *------------------
          *  IQ Frame Reading
@@ -235,8 +241,10 @@ int main(int argc, char* argv[])
         */        
         /* Reading IQ header */        
         read_size = fread(iq_header, sizeof(struct iq_header_struct), 1, stdin);
+        log_trace("Received IQ header"); 
         //dump_iq_header(iq_header); // Uncomment to debug the header content
         CHK_FR_READ(read_size,1);   
+        log_trace("Received Header length checked"); 
         CHK_SYNC_WORD(check_sync_word(iq_header));
         log_trace("<-- Frame received: type: %d, daq ind:[%d]",iq_header->frame_type, iq_header->daq_block_index);
 
@@ -305,6 +313,8 @@ int main(int argc, char* argv[])
             /* Writing IQ header */            
             fwrite(iq_header, sizeof(struct iq_header_struct), 1, stdout);
 
+            char emit_buf [ch_no * sample_size * 2]; 
+
             /* Writing Multichannel IQ data */
             for(int m=0; m<ch_no; m++)
             {   
@@ -317,8 +327,8 @@ int main(int argc, char* argv[])
                     read_pointer = sync_buffers[m].circ_buffer + delay;
                     fwrite(read_pointer , sizeof(uint8_t), sample_size*2, stdout);
                     fflush(stdout);
-
-                    //send_data(&netconf, read_pointer, sample_size, 2*sizeof(uint8_t));
+                    memcpy(&emit_buf[m * sample_size * 2], read_pointer, sample_size * 2); 
+                    
                 }
                 else // Write index must be 0
                 {
@@ -326,15 +336,18 @@ int main(int argc, char* argv[])
                     // Write first chunk
                     read_pointer = sync_buffers[m].circ_buffer + (delay+sample_size*2);
                     fwrite(read_pointer , sizeof(uint8_t), (sample_size*2-delay), stdout);
-                    //send_data(&netconf, read_pointer, sample_size * 2 - delay, sizeof(uint8_t));
 
+                    memcpy(&emit_buf[m * sample_size * 2], read_pointer, sample_size - 2*delay);
                     //Write second chunk
                     read_pointer = sync_buffers[m].circ_buffer;
                     fwrite(read_pointer , sizeof(uint8_t), delay, stdout);
+                    
+                    memcpy(&emit_buf[m * sample_size * 2+(sample_size - 2*delay)], read_pointer, delay);
                     fflush(stdout);
 
                     //send_data(&netconf, read_pointer, delay, sizeof(uint8_t));
                 }                   
+                emit_data(&config.save_settings, emit_buf, sample_size, 4, iq_header);
                 log_debug("Channel: %d, Delay: %d [%ld]",m,delay,iq_header->daq_block_index);            
             } // End of multichannel data block read-write
             log_trace("--> Transferring frame: type: %d, daq ind:[%d]",iq_header->frame_type, iq_header->daq_block_index);
