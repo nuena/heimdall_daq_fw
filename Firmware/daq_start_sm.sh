@@ -6,6 +6,13 @@
 #   License : GNU GPL V3
 #   Authors: Tamas Peto, Carl Laufer
 
+echo "This is script $0"
+
+if (( $EUID != 0 )); then
+    echo "Please run as root"
+    exit
+fi
+
 # Check config file
 res=$(python3 ini_checker.py 2>&1)
 if test -z "$res" 
@@ -82,10 +89,10 @@ rm _logs/*.log 2> /dev/null
 
 # The Kernel limits the maximum size of all buffers that libusb can allocate to 16MB by default.
 # In order to disable the limit, you have to run the following command as root:
-sudo sh -c "echo 0 > /sys/module/usbcore/parameters/usbfs_memory_mb"
+echo 0 > /sys/module/usbcore/parameters/usbfs_memory_mb
 
 # This command clear the caches
-echo '3' | sudo tee /proc/sys/vm/drop_caches > /dev/null
+echo '3' | tee /proc/sys/vm/drop_caches > /dev/null
 
 # Check ports(IQ server:5000, Hardware controller:5001)
 while true; do
@@ -138,7 +145,7 @@ fi
 chrt -f 99 python3 _daq_core/delay_sync.py 2> _logs/delay_sync.log &
 
 # Hardware Controller data path - Thread 3
-chrt -f 99 sudo python3 _daq_core/hw_controller.py 2> _logs/hwc.log &
+chrt -f 99 python3 _daq_core/hw_controller.py 2> _logs/hwc.log &
 # root priviliges are needed to drive the i2c master
 
 if [ $out_data_iface_type = eth ]; then
