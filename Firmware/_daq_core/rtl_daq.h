@@ -37,12 +37,12 @@
 #define ERR_DATA_PIPE_CLOSE   14
 #define ERR_CTR_THREAD_READ   15 
 
-#define CHK_SYNC_WORD(r)   if(r != 0)     {exit_flag = ERR_IQFRAME_SYC_WORD; break;}
-#define CHK_FR_WRITE(r, e) if(r != e)     {exit_flag = ERR_IQFRAME_WRITE;    break;}
-#define CHK_FR_READ(r, e)  if(r != e)     {exit_flag = ERR_IQFRAME_READ;     break;}
-#define CHK_CMD_READ(r, e) if(r != e)     {exit_flag = ERR_CMD_READ;         break;}
-#define CHK_DATA_PIPE(fd)  if(feof(fd))   {exit_flag = ERR_DATA_PIPE_CLOSE;  break;}
-#define CHK_CTR_READ(r, e) if(r != e)     {exit_flag = ERR_CTR_THREAD_READ;}
+#define CHK_SYNC_WORD(r)   if(r != 0)     {log_error("CHK_SYNC_WORD failed, r = %d != 0", r);       exit_flag = ERR_IQFRAME_SYC_WORD; break;}
+#define CHK_FR_WRITE(r, e) if(r != e)     {log_error("CHK_FR_WRITE failed, r = %d != %d", r, e);    exit_flag = ERR_IQFRAME_WRITE;    break;}
+#define CHK_FR_READ(r, e)  if(r != e)     {log_error("CHK_FR_READ failed, r = %d != %d", r, e);     exit_flag = ERR_IQFRAME_READ;     break;}
+#define CHK_CMD_READ(r, e) if(r != e)     {log_error("CHK_CMD_READ failed, r = %d != %d", r, e);    exit_flag = ERR_CMD_READ;         break;}
+#define CHK_DATA_PIPE(fd)  if(feof(fd))   {log_error("CHK_DATA_PIPE failed, fd %d is closed", fd);   exit_flag = ERR_DATA_PIPE_CLOSE;  break;}
+#define CHK_CTR_READ(r, e) if(r != e)     {log_error("CHK_CTR_READ failed, r = %d != %d", r, e);    exit_flag = ERR_CTR_THREAD_READ;}
 
 
 #define MAX_IQFRAME_PAYLOAD_SIZE 8388608 // 2^23[sample] per channel

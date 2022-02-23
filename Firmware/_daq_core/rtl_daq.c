@@ -413,6 +413,7 @@ void *read_thread_entry(void *arg)
         log_info("Device is initialized %d", rtl_rec->dev_ind);
         if (rtl_rec->dev_ind == 0)
         {
+            log_info("Exact gain: %.1f dB", rtlsdr_get_tuner_gain(dev) / 10.0); 
             log_info("Exact sample rate: %d Hz", rtlsdr_get_sample_rate(dev));
             log_info("Exact center frequency: %d Hz",rtlsdr_get_center_freq(dev));
         }
@@ -707,7 +708,7 @@ int main( int argc, char** argv )
                     fwrite(rtl_rec->buffer + buffer_size * rd_buff_ind, 1, buffer_size, stdout);                
                     memcpy(buf + i * buffer_size, rtl_rec->buffer + buffer_size * rd_buff_ind, buffer_size); 
                 }
-
+                log_iq_header(iq_header); 
                 // header and frame are assembled - send out or save: 
                 emit_data(&config.save_settings, buf, config.daq_buffer_size, 4, iq_header);  
                 free(buf); 

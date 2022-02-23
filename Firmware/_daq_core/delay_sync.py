@@ -32,11 +32,15 @@ from iq_header import IQHeader
 from shmemIface import outShmemIface, inShmemIface
 from time import sleep
 
-import sqlite3, datetime
+import datetime
+import sqlite3
 
 class delaySynchronizer():
 
     def __init__(self):
+
+        self.sqlenabled = False
+        
 
         logging.basicConfig(level=10)
         self.logger = logging.getLogger(__name__)
@@ -93,8 +97,8 @@ class delaySynchronizer():
         float_formatter = "{:.2f}".format
         np.set_printoptions(formatter={'float_kind':float_formatter})
 
-        self.logger.warning("Overwriting Log level to DEBUG")
-        self.logger.setLevel("DEBUG")
+#        self.logger.warning("Overwriting Log level to DEBUG")
+#        self.logger.setLevel("DEBUG")
 
         self.iq_header = IQHeader()
         """
@@ -117,11 +121,13 @@ class delaySynchronizer():
         self.iq_corrections = np.ones(self.M, dtype=np.complex64) # This vector holds the IQ compensation values
         self.iq_diff_ref = np.ones(self.M, dtype=np.complex64) # Reference IQ difference vector used in the tracking mode
 
-
-        self.sqlenabled = False
-        if self.sqlenabled: 
-            self.con = sqlite3.connect("../data/data.{}.db".format(datetime.datetime.now().isoformat()))
+        if (self.sqlenabled):
+            self.con = sqlite3.connect("data/delay_sync.{}.sqlite".format(datetime.datetime.now().isoformat(timespec='seconds')), 
+                                      isolation_level=None)  # isolation level None enables autocommit mode
             self.cur = self.con.cursor()
+            self.con.execute("PRAGMA synchronous=0")
+            self.con.execute("PRAGMA journal_mode = MEMORY");  # This is dangerous on app crash. 
+
             self.cur.execute(
                          "CREATE TABLE data (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                          "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, "
@@ -217,6 +223,8 @@ class delaySynchronizer():
         if not self.in_shmem_iface.init_ok:
             self.logger.critical("Shared memory (Decimator) initialization failed, exiting..")
             return -1
+        else: 
+            self.logger.info("Sucessfully opened shmem to FIR-decimator. Name: {}".format(self.in_shmem_iface_name))
 
         # Open shared memory interface towards the iq server module
         if self.N >= self.N_proc: out_shmem_size = int(1024+self.N*2*self.M*(32/8))
@@ -227,6 +235,8 @@ class delaySynchronizer():
         if not self.out_shmem_iface_iq.init_ok:
             self.logger.critical("Shared memory (IQ server) initialization failed, exiting..")
             return -1
+        else: 
+            self.logger.info("Sucessfully opened shmem to IQ Server. Name: {}".format(self.out_shmem_iface_iq))
 
         # Open shared memory interface towards the hardware controller module
         self.out_shmem_iface_hwc = outShmemIface("delay_sync_hwc",
@@ -235,12 +245,24 @@ class delaySynchronizer():
         if not self.out_shmem_iface_hwc.init_ok:
             self.logger.critical("Shared memory (HWC) initialization failed, exiting..")
             return -1
+        else: 
+            self.logger.info("Sucessfully opened shmem to the hardware controller. Name: {}".format(self.out_shmem_iface_hwc))
+
+        self.logger.info("Sucessfully opened all pipes and shared memory interfaces")
         return 0
 
     def close_interfaces(self):
         """
             Close the communication and data interfaces that are opened during the start of the module
         """
+
+        if self.cur is not None:
+            self.cur.close()
+        if self.con is not None:
+            self.con.commit()
+            self.con.close()
+
+
         if self.sync_ctr_fifo is not None:
             self.sync_ctr_fifo.write(pack('B',2) )
             self.sync_ctr_fifo.close()
@@ -332,6 +354,7 @@ class delaySynchronizer():
             Start the main processing loop
         """
         while True:
+            self.logger.debug("Re-entering main loop")
             sample_sync_flag = False
             iq_sync_flag     = False
             sync_state       = 0
@@ -428,7 +451,7 @@ class delaySynchronizer():
                              iq_samples_out[2, :].tobytes(),
                              iq_samples_out[3, :].tobytes()
                         ))
-                        self.con.commit()
+                        #self.con.commit()
 
                     # Truncate IQ sample matrix for further processing
                     if self.iq_header.frame_type == IQHeader.FRAME_TYPE_CAL:

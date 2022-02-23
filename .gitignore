@@ -15,6 +15,7 @@ Firmware/_testing/test_logs/*.log
 Firmware/_testing/test_logs/*.html
 Firmware/__pycache__/*
 
+Firmware/data/*
 data/*
 legacy/*
 !.keep

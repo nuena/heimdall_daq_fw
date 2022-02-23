@@ -1,9 +1,9 @@
 # Makefile for compiling the DAQ firmware
 # Author: Tamás Pető, Sándor Bajusz
 CC=gcc
-CFLAGS=-Wall -std=gnu99 -march=native -O0 -DLOG_USE_COLOR  -g
+#CFLAGS=-Wall -std=gnu99 -march=native -O0 -DLOG_USE_COLOR  -g
 # Optimized C-flags for Pi 4
-#CFLAGS=-Wall -std=gnu99 -mcpu=cortex-a72 -mfloat-abi=hard -mfpu=neon-fp-armv8 -mtune=cortex-a72 -Ofast
+CFLAGS=-Wall -std=gnu99 -mcpu=cortex-a72 -march=native -Ofast
 RM= rm -f
 
 HOST_ARCH := $(shell uname -m)
@@ -19,7 +19,7 @@ endif
 daq_util:
 	$(CC) $(CFLAGS) -c -o ini.o ini.c
 	$(CC) $(CFLAGS) -c -o log.o log.c
-	$(CC) $(CFLAGS) -c -o iq_header.o iq_header.c	
+	$(CC) $(CFLAGS) -c -o  iq_header.o iq_header.c 	
 	$(CC) $(CFLAGS) -c -o sh_mem_util.o sh_mem_util.c
 	$(CC) $(CFLAGS) -c -o krakenudp.o krakenudp.c
 

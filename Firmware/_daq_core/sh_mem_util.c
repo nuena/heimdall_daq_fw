@@ -133,9 +133,9 @@ int wait_buff_free(struct shmem_transfer_struct* sm_buff)
 int wait_buff_ready(struct shmem_transfer_struct* sm_buff)
 {
     uint8_t signal;      
-    CHK_DATA_PIPE(sm_buff->fw_ctr_fifo, -1);
+    CHK_DATA_PIPE(sm_buff->fw_ctr_fifo, -3);
     int read_size=fread(&signal, sizeof(signal), 1, sm_buff->fw_ctr_fifo);        
-    CHK_READ(read_size, 1 ,-1)          
+    CHK_READ(read_size, 1 ,-4)          
     if(signal == A_BUFF_READY){return 0;}
     else if(signal == B_BUFF_READY){return 1;}
     else if (signal == TERMINATE){return TERMINATE;}

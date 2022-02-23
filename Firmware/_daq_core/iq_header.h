@@ -65,3 +65,4 @@ typedef struct iq_frame_struct_32 // Complex float 32 compatible
 
 void dump_iq_header(iq_header_struct* iq_header);
 int check_sync_word(iq_header_struct* iq_header);
+void log_iq_header(struct iq_header_struct * iq_header);

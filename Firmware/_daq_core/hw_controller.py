@@ -186,6 +186,7 @@ class HWC():
                 logging.error("Improper inital gain values are given, set all to 0")
                 self.gains=[0]*self.M
                 self.last_gains=[0]*self.M
+        self.logger.info("Config file parsed")
 
     def init(self):
         """
@@ -227,6 +228,8 @@ class HWC():
                     self.iq_mod.set_IQ_value(0.5, 0.5, m)
             except:
                 logging.error("DAC Controller initialization failed")
+
+        self.logger.info("Sucessfully opened all pipes and shared memory interfaces")
         return 0
     
     def close(self):
@@ -404,6 +407,7 @@ class HWC():
         """
         while True:
             
+            self.logger.debug("Re-entering main loop")
             #############################################
             #           OBTAIN NEW DATA BLOCK           #  
             #############################################

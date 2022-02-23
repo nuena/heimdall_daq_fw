@@ -63,8 +63,7 @@ typedef struct
     int en_filter_reset;
     int tap_size;
     int log_level;
-    const char * udp_addr;
-    uint16_t udp_port;
+    settings_t save_settings; 
 } configuration;
 
 /*
@@ -89,14 +88,18 @@ static int handler(void* conf_struct, const char* section, const char* name,
     {pconfig->tap_size = atoi(value);}
     else if (MATCH("daq", "log_level")) 
     {pconfig->log_level = atoi(value);}
+    else if (MATCH("decimate", "save_mode"))
+        pconfig->save_settings.opmode = atoi(value); 
     else if (MATCH("decimate", "udp_addr"))
     {
-        pconfig->udp_addr = strdup(value);
+        pconfig->save_settings.udp_addr = strdup(value);
     }
     else if (MATCH("decimate", "udp_port"))
     {
-        pconfig->udp_port = atoi(value);
+        pconfig->save_settings.port = atoi(value);
     }
+    else if (MATCH("decimate", "filename")) 
+        pconfig->save_settings.filename = strdup(value); 
     else {return 0;  /* unknown section/name, error */}
     return 0;
 }
@@ -136,14 +139,6 @@ int main(int argc, char **argv)
     log_info("CPI size: %d", config.cpi_size);
     log_info("Calibration sample size : %d", config.cal_size);
 
-    //netconf_t netconf;
-    //if( !open_socket(&netconf, config.udp_addr, config.udp_port, "fir_decimate"))
-    //{
-    //    log_warn("Something seems to have gone wrong when opening UDP port");
-    //} else {
-    //    log_info("Connected to socket");
-    //}
-
     /*
      *-------------------------------------
      *  Allocation and initialization
@@ -182,6 +177,12 @@ int main(int argc, char **argv)
     else{log_info("Output shared memory interface succesfully initialized");}
 
     size_t tap_size = config.tap_size;
+
+    // initializing data save mechanism: 
+     config.save_settings.data_type = COMPLEX_FLOAT; 
+     init_data_output(&config.save_settings, ""); 
+     
+
     /* Allocating FIR filter data buffers */
 #ifdef ARM_NEON
     if (ne10_init() != NE10_OK){FATAL_ERR("Ne10 initialization failed")}	
@@ -245,6 +246,8 @@ int main(int argc, char **argv)
     void* frame_ptr;
     /* Main Processing loop*/
     log_debug("Preparations done, entering main loop"); 
+    
+    
     while(!exit_flag){
         log_trace("Starting main loop"); 
         // Acquire data buffer on the shared memory interface
@@ -375,15 +378,19 @@ int main(int argc, char **argv)
                     }
 
                 }
+                // note: not 2*iq_header->cpi because this is in complex samples, not in float "halfsamples":
+                emit_data(&config.save_settings, begin_of_data_buffer, iq_header->cpi_length, iq_header->active_ant_chs, iq_header); 
+                 
                 log_trace("<--Transfering frame type: %d, daq ind:[%d]", iq_header->frame_type,
                         iq_header->daq_block_index);
                 send_ctr_buff_ready(output_sm_buff, active_buff_ind);                
 
 
-                //send_data(&netconf, begin_of_data_buffer, iq_header->cpi_length, sizeof(float) * 2);
+
                 break;
             case 3:
                 /* Frame drop*/
+                log_warn("active_buff_ind == %d, \"Frame drop\"", active_buff_ind); 
                 break;
             default:
                 log_error("Failed to acquire free buffer");

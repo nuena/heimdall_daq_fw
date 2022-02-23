@@ -43,6 +43,14 @@ bool open_db(settings_t * settings, const char * debug_info)
                         "ch3 BLOB," \
                         "ch4 BLOB)";
     retval = sqlite3_exec(settings->out.sqlite, sql, NULL, NULL, &zErrMsg);
+    // set pragma synchronous off, significantly increases DB write rates (probably). If the system
+    // crashes while a transaction is running then we have a problem, but that's not likely and also 
+    // we can simply record new data: 
+    sqlite3_exec(settings->out.sqlite, "PRAGMA synchronous = OFF", NULL, NULL, &zErrMsg);
+
+    // this is more problematic since it can corrupt on application crash, maybe leave off?
+    //   sqlite3_exec(settings->out.sqlite, "PRAGMA journal_mode = MEMORY", NULL, NULL, &zErrMsg);
+
 
     if(retval != SQLITE_OK) {
         log_error("Could not create SQLite table! Error message: %s. %s", zErrMsg, debug_info);
@@ -137,12 +145,13 @@ void emit_data(
         const unsigned int n_ch, 
         const iq_header_struct * header) {
     //  TODO: move n_ch and settings->data_type to init_data_output?
-    log_trace("Emitting data, data_p %p, n_elem: %d, n_ch %d", data, n_elem, n_ch);
     switch (settings->opmode) {
         case NOOUTPUT: 
             // nothing to do
+            log_trace("In emit_data but data output is disabled -> nothing to do!"); 
             return; 
         case UDP: 
+            log_trace("Emitting data via UDP, data_p %p, n_elem: %d, n_ch %d", data, n_elem, n_ch);
             if (settings->out.udp_data.isConnected) {
                 int remaining_bytes = n_elem * n_ch * settings->data_type;
                 log_trace("Sending %d bytes via UDP from %p", remaining_bytes);
@@ -165,7 +174,8 @@ void emit_data(
                     log_error("You're trying to save %d channels to the database. Currently only %d channels are supported, this "
                             "will most likely cause unexpected behaviour!", n_ch, NUM_CHANNEL); 
                 } 
-                log_trace("Emmiting data via SQLite to file %s, database struct %p", settings->filename, settings->out.sqlite); 
+                log_trace("Emmiting data via SQLite to file %s, database struct %p, data pointer %p, n_elem %d, n_ch %d", 
+                        settings->filename, settings->out.sqlite, data, n_elem, n_ch); 
                 const char * sql = "INSERT INTO data (header, ch1, ch2, ch3, ch4) VALUES (?, ?, ?, ?, ?)"; 
                 sqlite3_stmt * stmt; 
                 int retval; 
@@ -179,7 +189,7 @@ void emit_data(
                 }
 
                 // data is not interleaved, just concatenated. 
-                retval = sqlite3_bind_blob(stmt, 1, header, sizeof(iq_header_struct), SQLITE_TRANSIENT); 
+                retval = sqlite3_bind_blob(stmt, 1, header, sizeof(iq_header_struct), SQLITE_STATIC); 
                 for (int i = 0; i < NUM_CHANNEL; i++) {
                     // calculate legth in bytes from begin of data array: 
                     const int len_frame_1ch = n_elem * settings->data_type; 
@@ -223,6 +233,7 @@ void emit_data(
 
         case WAV:
             {
+                log_trace ("Emitting data to WAV file"); 
                 // deinterleave real and complex to concatenated channels
                 // we have 4 channels concatenated: re1,im1,re1,im (interleaved) | re2/im2 (interleaved) | ...
                 // and want them re1|im1|re2|im2|...

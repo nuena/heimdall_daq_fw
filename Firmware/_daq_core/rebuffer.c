@@ -60,6 +60,7 @@ typedef struct
     int log_level;      
     const char * udp_addr;
     uint16_t udp_port;
+    settings_t save_settings; 
 } configuration;
 
 /*
@@ -75,7 +76,7 @@ static int handler(void* conf_struct, const char* section, const char* name,
     {
         pconfig->num_ch = atoi(value);
     }
-	else if (MATCH("calibration", "corr_size"))
+    else if (MATCH("calibration", "corr_size"))
     {
 		pconfig->cal_size = atoi(value);
     }
@@ -95,13 +96,21 @@ static int handler(void* conf_struct, const char* section, const char* name,
     {
         pconfig->log_level = atoi(value);
     }
-	else if (MATCH("rebuffer", "udp_addr"))
+    else if (MATCH("rebuffer", "udp_addr"))
     {
         pconfig->udp_addr = strdup(value);
     }
     else if (MATCH("rebuffer", "udp_port"))
     {
         pconfig->udp_port = atoi(value);
+    }
+    else if (MATCH("rebuffer", "save_mode"))
+    {
+        pconfig->save_settings.opmode = atoi(value);
+    }
+    else if (MATCH("rebuffer", "filename"))
+    {
+        pconfig->save_settings.filename = strdup(value);
     }
     else {return 0;  /* unknown section/name, error */}
     return 0;
@@ -195,8 +204,8 @@ int main(int argc, char* argv[])
     succ = init_out_sm_buffer(output_sm_buff);
     if(succ !=0){FATAL_ERR("Shared memory initialization failed. Exiting.")}
 
-//    netconf_t netconf;
-//    open_socket(&netconf, config.udp_addr, config.udp_port, "");
+    config.save_settings.data_type = COMPLEX_INT8;
+    init_data_output(&config.save_settings, "");
 	
     /*
      *
@@ -205,6 +214,7 @@ int main(int argc, char* argv[])
      */
     while(!exit_flag)
     {
+        log_trace("Restarting main loop");
         CHK_DATA_PIPE(stdin);
         /*
          *------------------
@@ -213,6 +223,7 @@ int main(int argc, char* argv[])
         */        
         /* Reading IQ header */
         read_size = fread(iq_header, sizeof(struct iq_header_struct), 1, stdin);                
+        log_iq_header(iq_header); 
         //dump_iq_header(iq_header); // Uncomment to debug IQ header content
         CHK_FR_READ(read_size,1);
         CHK_SYNC_WORD(check_sync_word(iq_header));
@@ -249,6 +260,7 @@ int main(int argc, char* argv[])
         {   
             case FRAME_TYPE_DUMMY:
             {         
+                log_trace("Received dummy frame"); 
                 /* Reset module parameters */
                 for(int m=0;m<ch_num;m++)
                 {                
@@ -263,6 +275,7 @@ int main(int argc, char* argv[])
             case FRAME_TYPE_DATA:
             case FRAME_TYPE_CAL:
             {
+                log_trace("Received data or calibration frame"); 
                 // Update read offset
                 rd_offset += (in_buffer_size*2);
                 rd_offset = rd_offset%(buffer_num * in_buffer_size*2);                        
@@ -337,22 +350,29 @@ int main(int argc, char* argv[])
                     
                     /* Place Multichannel IQ data */
                     chunk_size = buffer_num * in_buffer_size * 2 - wr_offset; // Available data until the end of the circular buffer                     
+                    char * emit_buf = malloc(4*active_out_buffer_size * 2); 
                     if (chunk_size >= active_out_buffer_size*2)
                     {
+                        log_trace("In branch chunk_size >= active_out_buffer_size*2");
+                        // copy data for emit_data
                         for(int m=0;m<iq_header->active_ant_chs;m++)
                         {   
                             // Get the circular buffer structure of the mth channel 
                             struct circ_buffer_struct *cbuff_m = &circ_buff_structs[m];
                             offset = IQ_HEADER_LENGTH/(sizeof(uint8_t)) + m*active_out_buffer_size*2;
-                            memcpy(frame_ptr+offset, cbuff_m->iq_circ_buffer+wr_offset, active_out_buffer_size*2);
-                            //send_data(&netconf, cbuff_m->iq_circ_buffer + wr_offset, out_buffer_size, 2*sizeof(uint8_t) );
+                            memcpy(frame_ptr + offset, cbuff_m->iq_circ_buffer + wr_offset, active_out_buffer_size*2);
+                            memcpy(emit_buf + m * active_out_buffer_size * 2,  cbuff_m->iq_circ_buffer + wr_offset, active_out_buffer_size*2);
                         }
                         wr_offset += active_out_buffer_size*2;
                         wr_offset = wr_offset % (buffer_num * in_buffer_size*2);                    
                     }
                     else
                     {                
+                        log_trace("In branch chunk_size < active_out_buffer_size*2"); 
                         chunk_size_2 = active_out_buffer_size*2-chunk_size;
+                        if (config.save_settings.opmode != 0) {
+                            log_warn("Saving data in this branch of the source code is currently not implemented!"); 
+                        }
                         for(int m=0;m<iq_header->active_ant_chs;m++)
                         {   
                             // Get the circular buffer structure of the mth channel 
@@ -361,12 +381,11 @@ int main(int argc, char* argv[])
                             memcpy(frame_ptr+offset, cbuff_m->iq_circ_buffer+wr_offset, chunk_size);
                             memcpy(frame_ptr+offset+chunk_size, cbuff_m->iq_circ_buffer, chunk_size_2);
 
-                        //    send_data(&netconf, cbuff_m->iq_circ_buffer+wr_offset, chunk_size, sizeof(uint8_t));
-                        //    send_data(&netconf, cbuff_m->iq_circ_buffer, chunk_size_2, sizeof(uint8_t));
-
                         }
                         wr_offset = chunk_size_2;
                     }   
+                    emit_data(&config.save_settings, emit_buf, active_out_buffer_size * 2, iq_header->active_ant_chs, iq_header);
+                    free(emit_buf); 
                     available -= active_out_buffer_size*2;                
                     send_ctr_buff_ready(output_sm_buff, active_buff_ind);                                      
                     log_trace("--> Transfering frame: type: %d, daq ind:[%d]",iq_header->frame_type, iq_header->daq_block_index);
